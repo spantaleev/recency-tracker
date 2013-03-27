@@ -1,0 +1,33 @@
+<!doctype html>
+<html>
+	<head>
+		<script type="text/javascript" src="http://cdnjs.cloudflare.com/ajax/libs/jquery/1.9.1/jquery.min.js"></script>
+	</head>
+	<body>
+		<form id="js-form-publish">
+			Channel: <input type="text" id="js-channel" value="some-channel" />
+			<br />
+
+			Secret: <input type="text" id="js-secret" value="YOUR_PUBLISHING_SECRET_HERE" style="width: 400px;" />
+			<br />
+
+			Version: <input type="number" id="js-version" value="50" />
+			<br /><br />
+
+			<input type="submit" />
+		</form>
+
+		<script type="text/javascript">
+			$('#js-form-publish').submit(function (ev) {
+				ev.preventDefault();
+
+				var channel = $('#js-channel').val(),
+					secret = $('#js-secret').val();
+					version = $('#js-version').val();
+
+				var img = new Image();
+				img.src = "http://localhost:9998/publish/" + secret + "/" + channel + "/" + version + "?" + new Date().getTime();
+			});
+		</script>
+	</body>
+</html>

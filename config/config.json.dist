@@ -1,0 +1,11 @@
+{
+	"publisher": {
+		"ip": "127.0.0.1",
+		"port": 9998,
+		"secret": "YOUR_PUBLISHING_SECRET_HERE"
+	},
+	"subscriber": {
+		"ip": "0.0.0.0",
+		"port": 9999
+	}
+}

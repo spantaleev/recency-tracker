@@ -1,0 +1,81 @@
+#!/usr/bin/env node
+
+const
+	path = require('path'),
+	express = require('express'),
+	http = require('http'),
+	sockjs = require('sockjs'),
+	config = require('../lib/config.js'),
+	tracker = new (require('../lib/tracker.js').Tracker)();
+
+var subscribe = sockjs.createServer();
+subscribe.on('connection', function (connection) {
+	console.log('[+] Connection #' + connection.id);
+
+	var client = null;
+
+	connection.on('data', function (message) {
+		var message = JSON.parse(message);
+		if (message === null || typeof(message.type) === 'undefined') {
+			return;
+		}
+
+		if (client === null) {
+			client = tracker.createClient(connection.id);
+
+			client.events.on('outdated', function (channel, newVersion) {
+				connection.write(JSON.stringify({
+					"type": "update",
+					"channel": channel,
+					"version": newVersion
+				}));
+			});
+		}
+
+		if (message.type === 'subscribe') {
+			if (typeof(message.channel) === 'undefined' || typeof(message.version) === 'undefined') {
+				return;
+			}
+
+			tracker.subscribe(client, message.channel, message.version);
+		} else if (message.type === 'unsubscribe') {
+			if (typeof(message.channel) === 'undefined') {
+				return;
+			}
+
+			tracker.unsubscribe(client, message.channel);
+		}
+	});
+
+	connection.on('close', function () {
+		console.log('[-] Connection #' + connection.id);
+
+		if (client !== null) {
+			tracker.deleteClient(client);
+			delete client;
+		}
+	});
+});
+
+var appPublish = express();
+appPublish.get('/publish/:secret/:channel/:version', function (request, response) {
+	if (request.params.secret === config.publisher.secret) {
+		tracker.publish(request.params.channel, request.params.version);
+		response.write('ok');
+	} else {
+		response.write('bad secret');
+	}
+	response.end();
+});
+
+var appSubscribe = express(),
+	staticResourcesPath = path.join(__dirname, "..", "resources", "static");
+appSubscribe.use(express.static(staticResourcesPath));
+
+var httpServerPublish = http.createServer(appPublish);
+var httpServerSubscribe = http.createServer(appSubscribe);
+
+subscribe.installHandlers(httpServerSubscribe, {"prefix": "/subscribe"});
+
+httpServerPublish.listen(config.publisher.port, config.publisher.ip);
+httpServerSubscribe.listen(config.subscriber.port, config.subscriber.ip);

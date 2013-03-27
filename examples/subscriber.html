@@ -1,0 +1,21 @@
+<!doctype html>
+<html>
+	<head>
+		<script src="http://cdn.sockjs.org/sockjs-0.3.min.js"></script>
+		<script src="http://localhost:9999/recency-tracker.js"></script>
+	</head>
+	<body>
+		Current version: <span id="version">N/A</span>
+
+		<script>
+			var tracker = new RecencyTracker('http://localhost:9999/subscribe'),
+				myCurrentVersion = 1;
+
+			document.getElementById('version').innerHTML = myCurrentVersion;
+
+			tracker.subscribe("some-channel", myCurrentVersion, function (newVersion) {
+				document.getElementById('version').innerHTML = newVersion;
+			});
+		</script>
+	</body>
+</html>
