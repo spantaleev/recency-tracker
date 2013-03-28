@@ -11,6 +11,10 @@
 	"persister": {
 		"type": "filesystem",
 
+		"memory": {
+			"maxItems": 1000
+		},
+
 		"filesystem": {
 			"storagePath": "/path/to/storage"
 		}
