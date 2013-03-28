@@ -105,16 +105,18 @@ RecencyTracker.prototype.onMessageUpdate = function (message) {
 
 RecencyTracker.prototype.subscribe = function (resource, version, onChange) {
 	if (typeof(this.resourceCallbacks[resource]) === 'undefined') {
-		this.resourceCallbacks[resource] = [];
+		//Initial subscription announce to the server.
+		this.resourceCallbacks[resource] = [onChange];
+
+		this.sockSend({
+			"type": "subscribe",
+			"resource": resource,
+			"version": version
+		}, true);
+	} else {
+		//Another subscription for the same resource - do not announce.
+		this.resourceCallbacks[resource].push(onChange);
 	}
-
-	this.resourceCallbacks[resource].push(onChange);
-
-	this.sockSend({
-		"type": "subscribe",
-		"resource": resource,
-		"version": version
-	}, true);
 };
 
 RecencyTracker.prototype.unsubscribe = function (resource) {
