@@ -7,7 +7,8 @@ const
 	sockjs = require('sockjs'),
 	config = require('../lib/config.js'),
 	validator = require('../lib/validator.js'),
-	tracker = new (require('../lib/tracker.js').Tracker)();
+	persister = require('../lib/persister.js')(config.persister),
+	tracker = require('../lib/tracker.js')(persister);
 
 var subscribe = sockjs.createServer();
 subscribe.on('connection', function (connection) {
