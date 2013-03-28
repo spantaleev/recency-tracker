@@ -5,16 +5,21 @@
 		<script src="http://localhost:9999/recency-tracker.js"></script>
 	</head>
 	<body>
-		Current version: <span id="version">N/A</span>
+		Resource: some-resource
+		<br />
+		Initial version: <span id="js-initial-version">N/A</span>
+		<br />
+		Current version: <span id="js-current-version">N/A</span>
 
 		<script>
 			var tracker = new RecencyTracker('http://localhost:9999/subscribe'),
 				myCurrentVersion = 1;
 
-			document.getElementById('version').innerHTML = myCurrentVersion;
+			document.getElementById('js-initial-version').innerHTML = myCurrentVersion;
+			document.getElementById('js-current-version').innerHTML = myCurrentVersion;
 
 			tracker.subscribe("some-resource", myCurrentVersion, function (newVersion) {
-				document.getElementById('version').innerHTML = newVersion;
+				document.getElementById('js-current-version').innerHTML = newVersion;
 			});
 		</script>
 	</body>
