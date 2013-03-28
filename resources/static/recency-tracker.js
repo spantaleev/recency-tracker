@@ -5,7 +5,7 @@ var RecencyTracker = function (serverUrl) {
 	this.sockReady = false;
 	this.isExplicitClose = false;
 	this.initMessages = [];
-	this.channelCallbacks = [];
+	this.resourceCallbacks = [];
 };
 
 RecencyTracker.prototype.sockInit = function () {
@@ -89,44 +89,44 @@ RecencyTracker.prototype.onMessage = function (message) {
 };
 
 RecencyTracker.prototype.onMessageUpdate = function (message) {
-	var channel = message.channel,
+	var resource = message.resource,
 		version = message.version;
 
-	if (typeof(this.channelCallbacks[channel]) === 'undefined') {
+	if (typeof(this.resourceCallbacks[resource]) === 'undefined') {
 		return;
 	}
 
-	var callbacks = this.channelCallbacks[channel];
+	var callbacks = this.resourceCallbacks[resource];
 	for (var idx in callbacks) {
 		var callback = callbacks[idx];
 		callback(version);
 	}
 };
 
-RecencyTracker.prototype.subscribe = function (channel, version, onChange) {
-	if (typeof(this.channelCallbacks[channel]) === 'undefined') {
-		this.channelCallbacks[channel] = [];
+RecencyTracker.prototype.subscribe = function (resource, version, onChange) {
+	if (typeof(this.resourceCallbacks[resource]) === 'undefined') {
+		this.resourceCallbacks[resource] = [];
 	}
 
-	this.channelCallbacks[channel].push(onChange);
+	this.resourceCallbacks[resource].push(onChange);
 
 	this.sockSend({
 		"type": "subscribe",
-		"channel": channel,
+		"resource": resource,
 		"version": version
 	}, true);
 };
 
-RecencyTracker.prototype.unsubscribe = function (channel) {
-	delete this.channelCallbacks[channel];
+RecencyTracker.prototype.unsubscribe = function (resource) {
+	delete this.resourceCallbacks[resource];
 
 	this.sockSend({
 		"type": "unsubscribe",
-		"channel": channel
+		"resource": resource
 	});
 
-	if (this.channelCallbacks.length === 0) {
-		//Last channel closed. Let's close the connection as well.
+	if (this.resourceCallbacks.length === 0) {
+		//Last resource closed. Let's close the connection as well.
 		this.destroy();
 	}
 };

@@ -13,7 +13,7 @@
 
 			document.getElementById('version').innerHTML = myCurrentVersion;
 
-			tracker.subscribe("some-channel", myCurrentVersion, function (newVersion) {
+			tracker.subscribe("some-resource", myCurrentVersion, function (newVersion) {
 				document.getElementById('version').innerHTML = newVersion;
 			});
 		</script>

@@ -23,27 +23,27 @@ subscribe.on('connection', function (connection) {
 		if (client === null) {
 			client = tracker.createClient(connection.id);
 
-			client.events.on('outdated', function (channel, newVersion) {
+			client.events.on('outdated', function (resource, newVersion) {
 				connection.write(JSON.stringify({
 					"type": "update",
-					"channel": channel,
+					"resource": resource,
 					"version": newVersion
 				}));
 			});
 		}
 
 		if (message.type === 'subscribe') {
-			if (typeof(message.channel) === 'undefined' || typeof(message.version) === 'undefined') {
+			if (typeof(message.resource) === 'undefined' || typeof(message.version) === 'undefined') {
 				return;
 			}
 
-			tracker.subscribe(client, message.channel, message.version);
+			tracker.subscribe(client, message.resource, message.version);
 		} else if (message.type === 'unsubscribe') {
-			if (typeof(message.channel) === 'undefined') {
+			if (typeof(message.resource) === 'undefined') {
 				return;
 			}
 
-			tracker.unsubscribe(client, message.channel);
+			tracker.unsubscribe(client, message.resource);
 		}
 	});
 
@@ -58,9 +58,9 @@ subscribe.on('connection', function (connection) {
 });
 
 var appPublish = express();
-appPublish.get('/publish/:secret/:channel/:version', function (request, response) {
+appPublish.get('/publish/:secret/:resource/:version', function (request, response) {
 	if (request.params.secret === config.publisher.secret) {
-		tracker.publish(request.params.channel, request.params.version);
+		tracker.publish(request.params.resource, request.params.version);
 		response.write('ok');
 	} else {
 		response.write('bad secret');

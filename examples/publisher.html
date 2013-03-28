@@ -5,7 +5,7 @@
 	</head>
 	<body>
 		<form id="js-form-publish">
-			Channel: <input type="text" id="js-channel" value="some-channel" />
+			Channel: <input type="text" id="js-resource" value="some-resource" />
 			<br />
 
 			Secret: <input type="text" id="js-secret" value="YOUR_PUBLISHING_SECRET_HERE" style="width: 400px;" />
@@ -21,12 +21,12 @@
 			$('#js-form-publish').submit(function (ev) {
 				ev.preventDefault();
 
-				var channel = $('#js-channel').val(),
+				var resource = $('#js-resource').val(),
 					secret = $('#js-secret').val();
 					version = $('#js-version').val();
 
 				var img = new Image();
-				img.src = "http://localhost:9998/publish/" + secret + "/" + channel + "/" + version + "?" + new Date().getTime();
+				img.src = "http://localhost:9998/publish/" + secret + "/" + resource + "/" + version + "?" + new Date().getTime();
 			});
 		</script>
 	</body>
