@@ -10,16 +10,19 @@
 		Initial version: <span id="js-initial-version">N/A</span>
 		<br />
 		Current version: <span id="js-current-version">N/A</span>
+		<br />
+		Additional data: <span id="js-current-data">N/A</span>
 
 		<script>
 			var tracker = new RecencyTracker('http://localhost:9999/subscribe'),
 				myCurrentVersion = 1;
 
-			document.getElementById('js-initial-version').innerHTML = myCurrentVersion;
-			document.getElementById('js-current-version').innerHTML = myCurrentVersion;
+			document.getElementById('js-initial-version').innerText = myCurrentVersion;
+			document.getElementById('js-current-version').innerText = myCurrentVersion;
 
-			tracker.subscribe("/some/resource", myCurrentVersion, function (newVersion) {
-				document.getElementById('js-current-version').innerHTML = newVersion;
+			tracker.subscribe("/some/resource", myCurrentVersion, function (newVersion, data) {
+				document.getElementById('js-current-version').innerText = newVersion;
+				document.getElementById('js-current-data').innerText = JSON.stringify(data);
 			});
 		</script>
 	</body>

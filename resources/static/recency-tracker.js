@@ -90,7 +90,8 @@ RecencyTracker.prototype.onMessage = function (message) {
 
 RecencyTracker.prototype.onMessageUpdate = function (message) {
 	var resource = message.resource,
-		version = message.version;
+		version = message.version,
+		data = message.data;
 
 	if (typeof(this.resourceCallbacks[resource]) === 'undefined') {
 		return;
@@ -99,7 +100,7 @@ RecencyTracker.prototype.onMessageUpdate = function (message) {
 	var callbacks = this.resourceCallbacks[resource];
 	for (var idx in callbacks) {
 		var callback = callbacks[idx];
-		callback(version);
+		callback(version, data);
 	}
 };
 
