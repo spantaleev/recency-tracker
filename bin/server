@@ -6,6 +6,7 @@ const
 	http = require('http'),
 	sockjs = require('sockjs'),
 	config = require('../lib/config.js'),
+	validator = require('../lib/validator.js'),
 	tracker = new (require('../lib/tracker.js').Tracker)();
 
 var subscribe = sockjs.createServer();
@@ -16,7 +17,12 @@ subscribe.on('connection', function (connection) {
 
 	connection.on('data', function (message) {
 		var message = JSON.parse(message);
-		if (message === null || typeof(message.type) !== 'string') {
+		if (message === null || typeof(message.type) !== 'string' || typeof(message.resource) !== 'string') {
+			return;
+		}
+
+		if (!validator.isValidResourceName(message.resource)) {
+			console.log('Invalid resource name: ' + message.resource);
 			return;
 		}
 
@@ -33,16 +39,12 @@ subscribe.on('connection', function (connection) {
 		}
 
 		if (message.type === 'subscribe') {
-			if (typeof(message.resource) !== 'string' || typeof(message.version) === 'undefined') {
+			if (typeof(message.version) === 'undefined') {
 				return;
 			}
 
 			tracker.subscribe(client, message.resource, message.version);
 		} else if (message.type === 'unsubscribe') {
-			if (typeof(message.resource) !== 'string') {
-				return;
-			}
-
 			tracker.unsubscribe(client, message.resource);
 		}
 	});

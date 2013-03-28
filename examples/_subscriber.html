@@ -5,7 +5,7 @@
 		<script src="http://localhost:9999/recency-tracker.js"></script>
 	</head>
 	<body>
-		Resource: some-resource
+		Resource: /some/resource
 		<br />
 		Initial version: <span id="js-initial-version">N/A</span>
 		<br />
@@ -18,7 +18,7 @@
 			document.getElementById('js-initial-version').innerHTML = myCurrentVersion;
 			document.getElementById('js-current-version').innerHTML = myCurrentVersion;
 
-			tracker.subscribe("some-resource", myCurrentVersion, function (newVersion) {
+			tracker.subscribe("/some/resource", myCurrentVersion, function (newVersion) {
 				document.getElementById('js-current-version').innerHTML = newVersion;
 			});
 		</script>
