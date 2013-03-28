@@ -2,93 +2,15 @@
 
 const
 	path = require('path'),
-	express = require('express'),
-	http = require('http'),
-	sockjs = require('sockjs'),
 	config = require('../lib/config.js'),
-	validator = require('../lib/validator.js'),
 	persister = require('../lib/persister.js')(config.persister),
 	tracker = require('../lib/tracker.js')(persister);
 
-var subscribe = sockjs.createServer();
-subscribe.on('connection', function (connection) {
-	console.log('[+] Connection #' + connection.id);
 
-	var client = null;
+const staticResourcesPath = path.join(__dirname, "..", "resources", "static");
+const serverSubscriber = require('../lib/server/subscriber.js').createServer(tracker, staticResourcesPath);
 
-	connection.on('data', function (message) {
-		var message = JSON.parse(message);
-		if (message === null || typeof(message.type) !== 'string' || typeof(message.resource) !== 'string') {
-			return;
-		}
+const serverPublisher = require('../lib/server/publisher.js').createServer(tracker, config.publisher.secret);
 
-		if (!validator.isValidResourceName(message.resource)) {
-			console.log('Invalid resource name: ' + message.resource);
-			return;
-		}
-
-		if (client === null) {
-			client = tracker.createClient(connection.id);
-
-			client.events.on('outdated', function (resource, newVersion) {
-				connection.write(JSON.stringify({
-					"type": "update",
-					"resource": resource,
-					"version": newVersion
-				}));
-			});
-		}
-
-		if (message.type === 'subscribe') {
-			if (typeof(message.version) === 'undefined') {
-				return;
-			}
-
-			tracker.subscribe(client, message.resource, message.version);
-		} else if (message.type === 'unsubscribe') {
-			tracker.unsubscribe(client, message.resource);
-		}
-	});
-
-	connection.on('close', function () {
-		console.log('[-] Connection #' + connection.id);
-
-		if (client !== null) {
-			tracker.deleteClient(client);
-			delete client;
-		}
-	});
-});
-
-var appPublish = express();
-appPublish.use(express.bodyParser());
-
-appPublish.post('/publish', function (request, response) {
-	if (! ('secret' in request.body) || ! ('resource' in request.body) || ! ('version' in request.body)) {
-		console.log('Received malformed publish request.');
-		response.write(JSON.stringify({"ok": false, "error": "bad request"}));
-		return response.end();
-	}
-
-	if (request.body.secret !== config.publisher.secret) {
-		console.log('Received unauthorized publish request.');
-		response.write(JSON.stringify({"ok": false, "error": "bad secret"}));
-		return response.end();
-	}
-
-	tracker.publish(request.body.resource, request.body.version);
-	response.write(JSON.stringify({"ok": true}));
-	response.end();
-});
-
-var appSubscribe = express(),
-	staticResourcesPath = path.join(__dirname, "..", "resources", "static");
-appSubscribe.use(express.static(staticResourcesPath));
-
-var httpServerPublish = http.createServer(appPublish);
-var httpServerSubscribe = http.createServer(appSubscribe);
-
-subscribe.installHandlers(httpServerSubscribe, {"prefix": "/subscribe"});
-
-httpServerPublish.listen(config.publisher.port, config.publisher.ip);
-httpServerSubscribe.listen(config.subscriber.port, config.subscriber.ip);
+serverPublisher.listen(config.publisher.port, config.publisher.ip);
+serverSubscriber.listen(config.subscriber.port, config.subscriber.ip);
