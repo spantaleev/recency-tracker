@@ -16,7 +16,7 @@ subscribe.on('connection', function (connection) {
 
 	connection.on('data', function (message) {
 		var message = JSON.parse(message);
-		if (message === null || typeof(message.type) === 'undefined') {
+		if (message === null || typeof(message.type) !== 'string') {
 			return;
 		}
 
@@ -33,13 +33,13 @@ subscribe.on('connection', function (connection) {
 		}
 
 		if (message.type === 'subscribe') {
-			if (typeof(message.resource) === 'undefined' || typeof(message.version) === 'undefined') {
+			if (typeof(message.resource) !== 'string' || typeof(message.version) === 'undefined') {
 				return;
 			}
 
 			tracker.subscribe(client, message.resource, message.version);
 		} else if (message.type === 'unsubscribe') {
-			if (typeof(message.resource) === 'undefined') {
+			if (typeof(message.resource) !== 'string') {
 				return;
 			}
 
