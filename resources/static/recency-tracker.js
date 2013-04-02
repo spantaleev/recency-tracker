@@ -1,144 +1,157 @@
-var RecencyTracker = function (serverUrl) {
-	this.serverUrl = serverUrl;
-	this.sock = null;
-	this.sockMessagesQueue = [];
-	this.sockReady = false;
-	this.isExplicitClose = false;
-	this.initMessages = [];
-	this.resourceCallbacks = [];
-};
-
-RecencyTracker.prototype.sockInit = function () {
-	if (this.sock !== null) {
-		return;
-	}
-
-	this.sock = new SockJS(this.serverUrl);
-
-	var self = this;
-
-	this.sock.onopen = function() {
-		for (var idx in self.sockMessagesQueue) {
-			var message = self.sockMessagesQueue[idx];
-			self.sock.send(message);
-		}
-
-		self.sockMessagesQueue = [];
-		self.sockReady = true;
+(function () {
+	var Subscription = function (resource, version, changeHandlers) {
+		this.resource = resource;
+		this.version = version;
+		this.changeHandlers = changeHandlers;
 	};
 
-	this.sock.onclose = function() {
-		if (self.isExplicitClose) {
-			//Ignore just this one close.
-			self.isExplicitClose = false;
+	Subscription.prototype.addChangeHandler = function (callback) {
+		this.changeHandlers.push(callback);
+	};
+
+	Subscription.prototype.update = function (version, data) {
+		this.version = version;
+
+		for (var idx in this.changeHandlers) {
+			this.changeHandlers[idx](version, data);
+		}
+	};
+
+
+	var STATE_DISCONNECTED = 0;
+	var STATE_CONNECTING = 1;
+	var STATE_CONNECTED = 2;
+
+
+	window.RecencyTracker = function (serverUrl) {
+		this._serverUrl = serverUrl;
+		this._sock = null;
+		this._sockMessagesQueue = [];
+		this._subscriptions = {};
+		this._subscriptionsCount = 0;
+		this._state = STATE_DISCONNECTED;
+	};
+
+	RecencyTracker.prototype.subscribe = function (resource, version, onChange) {
+		if (resource in this._subscriptions) {
+			var subscription = this._subscriptions[resource];
+			subscription.addChangeHandler(onChange);
+		} else {
+			var subscription = new Subscription(resource, version, [onChange]);
+			this._subscriptions[resource] = subscription;
+			this._subscriptionsCount += 1;
+
+			//Announce immediately only if connected.
+			//Otherwise wait for the initial connection, which will announce all subscriptions.
+			if (this._state === STATE_CONNECTED) {
+				this._announce(subscription);
+			} else {
+				this._sockInit();
+			}
+		}
+	};
+
+	RecencyTracker.prototype.unsubscribe = function (resource) {
+		if (! (resource in this._subscriptions)) {
 			return;
 		}
 
-		//While reconnecting, this `onclose()` callback will be called
-		//once for each failed attempt.
+		var subscription = this._subscriptions[resource];
 
-		var wasReady = self.sockReady;
+		this._sockSend({
+			"type": "unsubscribe",
+			"resource": resource
+		});
 
-		self.sock = null;
-		self.sockReady = false;
+		delete this._subscriptions[resource];
+		this._subscriptionsCount -= 1;
 
-		if (wasReady) {
-			//This is a disconnect after a succesfull connection (the real disconnect).
-			//Schedule all init messages for resending, before we issue a reconnect.
-			for (var idx in self.initMessages) {
-			   self.sockMessagesQueue.push(self.initMessages[idx]);
-			}
+		if (this._subscriptionsCount === 0) {
+			//Don't keep an open connection for no subscriptions.
+			this._disconnect();
+		}
+	};
+
+	RecencyTracker.prototype._sockInit = function () {
+		if (this._state !== STATE_DISCONNECTED) {
+			return;
 		}
 
-		//Try to reconnect soon.
-		window.setTimeout(function () {
-			self.sockInit();
-		}, 1000);
+		this._state = STATE_CONNECTING;
+
+		var self = this;
+
+		var init = function () {
+			self._sock = new SockJS(self._serverUrl);
+
+			self._sock.onopen = function() {
+				self._state = STATE_CONNECTED;
+
+				for (var resource in self._subscriptions) {
+					self._announce(self._subscriptions[resource]);
+				}
+
+				for (var idx in self._sockMessagesQueue) {
+					self._sock.send(self._sockMessagesQueue[idx]);
+				}
+				self._sockMessagesQueue = [];
+			};
+
+			self._sock.onclose = function() {
+				self._state = STATE_CONNECTING;
+
+				window.setTimeout(function () {
+					init();
+				}, 1000);
+			};
+
+			self._sock.onmessage = function (e) {
+				var message = JSON.parse(e.data);
+				self._onMessage(message);
+			};
+		};
+
+		init();
 	};
 
-	this.sock.onmessage = function (e) {
-		var message = JSON.parse(e.data);
-		self.onMessage(message);
+	RecencyTracker.prototype._sockSend = function (message) {
+		var message = JSON.stringify(message);
+
+		if (this._state === STATE_CONNECTED) {
+			this._sock.send(message);
+		} else {
+			this._sockMessagesQueue.push(message);
+			this._sockInit();
+		}
 	};
-};
 
-RecencyTracker.prototype.sockSend = function (message, isInitMessage) {
-	var message = JSON.stringify(message);
+	RecencyTracker.prototype._onMessage = function (message) {
+		if (message.type === "update") {
+			var resource = message.resource,
+				version = message.version,
+				data = message.data;
 
-	if (isInitMessage) {
-		//Keep track of this initialization message, so we can rebuild
-		//the connection if it fails.
-		this.initMessages.push(message);
-	}
+			if (resource in this._subscriptions) {
+				this._subscriptions[resource].update(version, data);
+			}
+		} else {
+			throw new Error("Unknown message type: " + JSON.stringify(message));
+		}
+	};
 
-	if (this.sockReady) {
-		this.sock.send(message);
-	} else {
-		this.sockMessagesQueue.push(message);
-	}
-
-	this.sockInit();
-};
-
-RecencyTracker.prototype.onMessage = function (message) {
-	if (message.type === "update") {
-		this.onMessageUpdate(message);
-	} else {
-		alert("Unknown message type: " + JSON.stringify(message));
-	}
-};
-
-RecencyTracker.prototype.onMessageUpdate = function (message) {
-	var resource = message.resource,
-		version = message.version,
-		data = message.data;
-
-	if (typeof(this.resourceCallbacks[resource]) === 'undefined') {
-		return;
-	}
-
-	var callbacks = this.resourceCallbacks[resource];
-	for (var idx in callbacks) {
-		var callback = callbacks[idx];
-		callback(version, data);
-	}
-};
-
-RecencyTracker.prototype.subscribe = function (resource, version, onChange) {
-	if (typeof(this.resourceCallbacks[resource]) === 'undefined') {
-		//Initial subscription announce to the server.
-		this.resourceCallbacks[resource] = [onChange];
-
-		this.sockSend({
+	RecencyTracker.prototype._announce = function (subscription) {
+		this._sockSend({
 			"type": "subscribe",
-			"resource": resource,
-			"version": version
-		}, true);
-	} else {
-		//Another subscription for the same resource - do not announce.
-		this.resourceCallbacks[resource].push(onChange);
-	}
-};
+			"resource": subscription.resource,
+			"version": subscription.version
+		});
+	};
 
-RecencyTracker.prototype.unsubscribe = function (resource) {
-	delete this.resourceCallbacks[resource];
-
-	this.sockSend({
-		"type": "unsubscribe",
-		"resource": resource
-	});
-
-	if (this.resourceCallbacks.length === 0) {
-		//Last resource closed. Let's close the connection as well.
-		this.destroy();
-	}
-};
-
-RecencyTracker.prototype.destroy = function () {
-	if (this.sock === null) {
-		return;
-	}
-
-	this.isExplicitClose = true;
-	this.sock.close();
-};
+	RecencyTracker.prototype._disconnect = function () {
+		if (this._sock !== null) {
+			this._sock.onclose = function () {};
+			this._sock.close();
+			this._state = STATE_DISCONNECTED;
+		}
+	};
+})();
