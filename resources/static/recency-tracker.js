@@ -33,6 +33,8 @@
 	};
 
 	RecencyTracker.prototype.subscribe = function (resource, version, onChange) {
+		version = ('' + version);
+
 		if (resource in this._subscriptions) {
 			var subscription = this._subscriptions[resource];
 			subscription.addChangeHandler(onChange);
