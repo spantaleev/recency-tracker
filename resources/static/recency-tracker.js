@@ -102,7 +102,7 @@
 
 				window.setTimeout(function () {
 					init();
-				}, 1000);
+				}, 5000);
 			};
 
 			self._sock.onmessage = function (e) {
