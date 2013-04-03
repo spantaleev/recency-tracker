@@ -17,12 +17,12 @@
 			var tracker = new RecencyTracker('http://localhost:9999/subscribe'),
 				myCurrentVersion = 1;
 
-			document.getElementById('js-initial-version').innerText = myCurrentVersion;
-			document.getElementById('js-current-version').innerText = myCurrentVersion;
+			document.getElementById('js-initial-version').innerHTML = myCurrentVersion;
+			document.getElementById('js-current-version').innerHTML = myCurrentVersion;
 
 			tracker.subscribe("/some/resource", myCurrentVersion, function (newVersion, data) {
-				document.getElementById('js-current-version').innerText = newVersion;
-				document.getElementById('js-current-data').innerText = JSON.stringify(data);
+				document.getElementById('js-current-version').innerHTML = newVersion;
+				document.getElementById('js-current-data').innerHTML = JSON.stringify(data);
 			});
 		</script>
 	</body>
