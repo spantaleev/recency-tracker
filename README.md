@@ -142,3 +142,6 @@ Installation
  * Copy `config/config.json.dist` to `config/config.json`
  * Customize the configuration in `config/config.json` - be sure to **change the publishing secret**
  * Run `npm start` to start the server
+
+In practice, you may wish to run the server process under a process manager, such as [supervisord](http://supervisord.org/).
+For a sample configuration, see `resources/supervisord-config.conf`.
