@@ -1,3 +1,5 @@
+/** recency-tracker 1.0 - BSD licensed - https://github.com/spantaleev/recency-tracker **/
+
 (function () {
 	var Subscription = function (resource, version, changeHandlers) {
 		this.resource = resource;
