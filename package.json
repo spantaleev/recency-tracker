@@ -1,6 +1,16 @@
 {
 	"name": "recency-tracker",
 	"description": "A server that tracks the recency of resources and notifies subscribers of updates",
+	"keywords": ["notifications", "pubsub"],
+	"author": {
+		"name": "Slavi Pantaleev",
+		"email": "s.pantaleev@gmail.com",
+		"url": "http://devture.com/"
+	},
+	"repository": {
+		"type": "git",
+		"url": "https://github.com/spantaleev/recency-tracker"
+	},
 	"version": "1.0.0",
 	"license": "BSD",
 	"dependencies": {
