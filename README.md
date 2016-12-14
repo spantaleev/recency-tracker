@@ -138,7 +138,7 @@ Installation
  * Make sure you have [nodejs](http://nodejs.org/) installed
  * Clone this repository
  * Run `npm install` to install the required dependencies
- * Run `npm install MD5@1.0` if you plan on using the filesystem persister (enabled by default)
+ * Run `npm install md5@2.x` if you plan on using the filesystem persister (enabled by default)
  * Copy `config/config.json.dist` to `config/config.json`
  * Customize the configuration in `config/config.json` - be sure to **change the publishing secret**
  * Run `npm start` to start the server
