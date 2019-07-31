@@ -1,11 +1,14 @@
 {
 	"name": "recency-tracker",
 	"description": "A server that tracks the recency of resources and notifies subscribers of updates",
-	"keywords": ["notifications", "pubsub"],
+	"keywords": [
+		"notifications",
+		"pubsub"
+	],
 	"author": {
 		"name": "Slavi Pantaleev",
-		"email": "s.pantaleev@gmail.com",
-		"url": "http://devture.com/"
+		"email": "slavi@devture.com",
+		"url": "https://devture.com/"
 	},
 	"repository": {
 		"type": "git",
@@ -14,13 +17,11 @@
 	"version": "1.0.0",
 	"license": "BSD",
 	"dependencies": {
-		"express": "3.2.0",
-		"sockjs": "0.3.5"
+		"express": "4.17.1",
+		"sockjs": "0.3.19"
 	},
-	"optionalDependencies": {
-	},
-	"devDependencies": {
-	},
+	"optionalDependencies": {},
+	"devDependencies": {},
 	"scripts": {
 		"start": "node bin/server"
 	}
