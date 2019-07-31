@@ -15,7 +15,7 @@
 		"url": "https://github.com/spantaleev/recency-tracker"
 	},
 	"version": "1.0.0",
-	"license": "BSD",
+	"license": "BSD-3-Clause",
 	"dependencies": {
 		"express": "4.17.1",
 		"sockjs": "0.3.19"
