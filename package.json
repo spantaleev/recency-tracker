@@ -19,7 +19,7 @@
 	"dependencies": {
 		"express": "4.17.1",
 		"body-parser": "1.19.0",
-		"sockjs": "0.3.19"
+		"sockjs": "0.3.20"
 	},
 	"optionalDependencies": {},
 	"devDependencies": {},
