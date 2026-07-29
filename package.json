@@ -18,7 +18,7 @@
 	"license": "BSD-3-Clause",
 	"dependencies": {
 		"express": "4.22.2",
-		"body-parser": "1.20.5",
+		"body-parser": "1.20.6",
 		"sockjs": "0.3.24"
 	},
 	"optionalDependencies": {},
