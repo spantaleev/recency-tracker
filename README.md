@@ -152,6 +152,11 @@ Installation
 In practice, you may wish to run the server process under a process manager, such as [supervisord](http://supervisord.org/).
 For a sample configuration, see `resources/supervisord-config.conf`.
 
+Set `RECENCY_TRACKER_CONFIG` to load a configuration file from a different path.
+Otherwise, the server reads `config/config.json` from its working directory.
+`RECENCY_TRACKER_PUBLISHER_SECRET`, when set, overrides `publisher.secret` in that
+file without changing it. An explicitly empty environment secret prevents startup.
+
 
 Testing
 -------
