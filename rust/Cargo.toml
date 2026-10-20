@@ -17,6 +17,9 @@ ryu-js = "1"
 
 tempfile = "=3.27.0"
 
+[target.'cfg(unix)'.dependencies]
+rustix = { version = "1", features = ["fs"] }
+
 [profile.release]
 strip = true
 lto = "thin"

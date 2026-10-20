@@ -176,6 +176,10 @@ impl Cache {
             capacity,
         }
     }
+    fn invalidate(&mut self, resource: &Resource) {
+        self.records.remove(resource);
+        self.order.retain(|r| r != resource);
+    }
     fn insert(&mut self, resource: Resource, record: Record) {
         if self.capacity == 0 {
             return;
@@ -266,10 +270,22 @@ impl Actor {
         Ok(())
     }
     async fn publish(&mut self, resource: Resource, record: Record) -> Result<(), Error> {
-        self.storage
-            .write(&resource, &record)
-            .await
-            .map_err(Error::Storage)?;
+        if let Err(error) = self.storage.write(&resource, &record).await {
+            // A failed directory sync can follow a successful atomic replacement.
+            // Force catch-up from disk instead of serving a possibly stale cache.
+            self.cache.invalidate(&resource);
+            let affected = self
+                .by_resource
+                .get(&resource)
+                .into_iter()
+                .flatten()
+                .copied()
+                .collect::<Vec<_>>();
+            for id in affected {
+                self.disconnect(id);
+            }
+            return Err(Error::Storage(error));
+        }
         self.cache.insert(resource.clone(), record.clone());
         let text = record.message(&resource);
         let mut slow = Vec::new();
@@ -444,9 +460,14 @@ mod tests {
             t.publish(r.clone(), record(1)).await,
             Err(Error::Storage(_))
         ));
-        assert_eq!(counts(&t).await, (1, 1, 0));
+        assert_eq!(counts(&t).await, (0, 0, 0));
+        assert!(*c.cancelled.borrow());
         assert!(c.updates.try_recv().is_err());
         std::fs::rename(&moved, dir.path()).unwrap();
+        let mut c = t.connect().await.unwrap();
+        t.subscribe(c.id, r.clone(), Version("0".into()))
+            .await
+            .unwrap();
         t.publish(r, record(2)).await.unwrap();
         assert!(
             c.updates
@@ -455,6 +476,71 @@ mod tests {
                 .unwrap()
                 .text
                 .contains("\"version\":\"2\"")
+        );
+        t.shutdown().await;
+        task.await.unwrap();
+    }
+    #[test]
+    fn invalidation_preserves_fifo_eviction_after_reinsertion() {
+        let mut cache = Cache::new(2);
+        cache.insert(resource("a"), record(1));
+        cache.insert(resource("b"), record(1));
+        cache.invalidate(&resource("a"));
+        cache.insert(resource("a"), record(2));
+        cache.insert(resource("c"), record(1));
+        assert_eq!(cache.records.len(), 2);
+        assert_eq!(cache.order.len(), 2);
+        assert!(cache.records.contains_key(&resource("a")));
+        assert!(cache.records.contains_key(&resource("c")));
+        assert!(!cache.records.contains_key(&resource("b")));
+    }
+    #[tokio::test]
+    async fn failure_after_rename_forces_subscribers_to_reload_committed_record() {
+        let dir = tempfile::tempdir().unwrap();
+        let storage = Storage::open(Some(dir.path().to_owned())).unwrap();
+        let fault = storage.clone();
+        let (t, task) = Tracker::start(storage, 2, Limits::default());
+        let r = resource("updates");
+        t.publish(r.clone(), record(1)).await.unwrap();
+        let c = t.connect().await.unwrap();
+        t.subscribe(c.id, r.clone(), Version("1".into()))
+            .await
+            .unwrap();
+        let unaffected = t.connect().await.unwrap();
+        t.subscribe(unaffected.id, resource("other"), Version("0".into()))
+            .await
+            .unwrap();
+        fault.fail_next_write_after_rename();
+        assert!(matches!(
+            t.publish(r.clone(), record(2)).await,
+            Err(Error::Storage(_))
+        ));
+        assert!(*c.cancelled.borrow());
+        assert!(!*unaffected.cancelled.borrow());
+        assert_eq!(counts(&t).await, (1, 1, 0));
+        assert_eq!(fault.read(&r).await.unwrap().unwrap().version.0, "2");
+        let mut fresh = t.connect().await.unwrap();
+        t.subscribe(fresh.id, r.clone(), Version("1".into()))
+            .await
+            .unwrap();
+        assert!(
+            fresh
+                .updates
+                .recv()
+                .await
+                .unwrap()
+                .text
+                .contains("\"version\":\"2\"")
+        );
+        t.publish(r, record(3)).await.unwrap();
+        assert!(
+            fresh
+                .updates
+                .recv()
+                .await
+                .unwrap()
+                .text
+                .contains("\"version\":\"3\"")
         );
         t.shutdown().await;
         task.await.unwrap();

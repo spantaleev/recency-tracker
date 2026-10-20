@@ -2,7 +2,7 @@ use crate::model::{Record, Resource};
 use sha2::{Digest, Sha256};
 use std::{
     fs::File,
-    io::{self, Write},
+    io::{self, Read, Write},
     path::{Path, PathBuf},
     sync::Arc,
 };
@@ -12,6 +12,8 @@ pub struct Storage(Option<Arc<Directory>>);
 struct Directory {
     path: PathBuf,
     _lock: File,
+    #[cfg(test)]
+    fail_after_rename: std::sync::atomic::AtomicBool,
 }
 impl Storage {
     /// Hold an exclusive advisory lock for this server's lifetime.
@@ -52,7 +54,12 @@ impl Storage {
         lock.try_lock().map_err(|_| {
             io::Error::other("storage is already locked or does not support locking")
         })?;
-        Ok(Self(Some(Arc::new(Directory { path, _lock: lock }))))
+        Ok(Self(Some(Arc::new(Directory {
+            path,
+            _lock: lock,
+            #[cfg(test)]
+            fail_after_rename: std::sync::atomic::AtomicBool::new(false),
+        }))))
     }
     pub fn filename(directory: &Path, resource: &Resource) -> PathBuf {
         let hash = Sha256::digest(resource.as_str().as_bytes())
@@ -67,26 +74,58 @@ impl Storage {
         };
         // A publisher body is at most 100 KiB. Bound reads of corrupt/untrusted files too.
         let path = Self::filename(&directory.path, resource);
-        let file = match tokio::fs::File::open(path).await {
-            Ok(file) => file,
-            Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(None),
-            Err(e) => return Err(e),
-        };
-        use tokio::io::AsyncReadExt;
-        let mut bytes = Vec::new();
-        file.take(1024 * 1024 + 1).read_to_end(&mut bytes).await?;
-        if bytes.len() > 1024 * 1024 {
-            return Err(io::Error::new(
-                io::ErrorKind::InvalidData,
-                "persisted resource exceeds 1 MiB",
-            ));
-        }
-        serde_json::from_slice(&bytes).map(Some).map_err(|_| {
-            io::Error::new(
-                io::ErrorKind::InvalidData,
-                "invalid persisted resource JSON",
-            )
+        tokio::task::spawn_blocking(move || {
+            #[cfg(unix)]
+            let opened = {
+                use rustix::fs::{Mode, OFlags, open};
+                // Nonblocking open rejects FIFOs without waiting for a writer.
+                // Check the opened inode, avoiding a metadata/open race.
+                open(
+                    &path,
+                    OFlags::RDONLY | OFlags::NONBLOCK | OFlags::NOFOLLOW | OFlags::CLOEXEC,
+                    Mode::empty(),
+                )
+                .map(File::from)
+                .map_err(io::Error::from)
+            };
+            #[cfg(not(unix))]
+            let opened = File::open(&path);
+            let file = match opened {
+                Ok(file) => file,
+                Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(None),
+                Err(e) => return Err(e),
+            };
+            if !file.metadata()?.is_file() {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    "persisted resource is not a regular file",
+                ));
+            }
+            let mut bytes = Vec::new();
+            file.take(1024 * 1024 + 1).read_to_end(&mut bytes)?;
+            if bytes.len() > 1024 * 1024 {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    "persisted resource exceeds 1 MiB",
+                ));
+            }
+            serde_json::from_slice(&bytes).map(Some).map_err(|_| {
+                io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    "invalid persisted resource JSON",
+                )
+            })
         })
+        .await
+        .map_err(io::Error::other)?
+    }
+    #[cfg(test)]
+    pub(crate) fn fail_next_write_after_rename(&self) {
+        self.0
+            .as_ref()
+            .unwrap()
+            .fail_after_rename
+            .store(true, std::sync::atomic::Ordering::Relaxed);
     }
     /// The tracker actor orders writes. Sync before acknowledging success.
     pub async fn write(&self, resource: &Resource, record: &Record) -> io::Result<()> {
@@ -115,6 +154,13 @@ impl Storage {
             temporary.write_all(&bytes)?;
             temporary.as_file().sync_all()?;
             temporary.persist(destination).map_err(|e| e.error)?;
+            #[cfg(test)]
+            if directory
+                .fail_after_rename
+                .swap(false, std::sync::atomic::Ordering::Relaxed)
+            {
+                return Err(io::Error::other("injected failure after rename"));
+            }
             #[cfg(unix)]
             File::open(&directory.path)?.sync_all()?;
             Ok(())
@@ -151,6 +197,42 @@ mod tests {
         assert!(Storage::open(Some(dir.path().to_owned())).is_err());
         drop(storage);
         assert!(Storage::open(Some(dir.path().to_owned())).is_ok());
+    }
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn rejects_nonregular_records_without_blocking() {
+        use rustix::fs::{CWD, Mode, mkfifoat};
+        let dir = tempfile::tempdir().unwrap();
+        let r = resource();
+        let path = Storage::filename(dir.path(), &r);
+        let storage = Storage::open(Some(dir.path().to_owned())).unwrap();
+        mkfifoat(CWD, &path, Mode::RUSR | Mode::WUSR).unwrap();
+        let result =
+            tokio::time::timeout(std::time::Duration::from_secs(1), storage.read(&r)).await;
+        if result.is_err() {
+            // Unblock a regressed blocking open before the test runtime is dropped.
+            // Otherwise a failed assertion could leave CI waiting forever.
+            if let Ok(fd) = rustix::fs::open(
+                &path,
+                rustix::fs::OFlags::WRONLY | rustix::fs::OFlags::NONBLOCK,
+                Mode::empty(),
+            ) {
+                let _ = File::from(fd).write_all(b"{}");
+            }
+        }
+        assert_eq!(
+            result.unwrap().unwrap_err().kind(),
+            io::ErrorKind::InvalidData
+        );
+        std::fs::remove_file(&path).unwrap();
+        std::fs::create_dir(&path).unwrap();
+        assert_eq!(
+            storage.read(&r).await.unwrap_err().kind(),
+            io::ErrorKind::InvalidData
+        );
+        std::fs::remove_dir(&path).unwrap();
+        std::os::unix::fs::symlink("/dev/zero", &path).unwrap();
+        assert!(storage.read(&r).await.is_err());
     }
     #[tokio::test]
     async fn corrupt_data_is_an_error_not_an_unknown_version() {
