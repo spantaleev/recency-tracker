@@ -69,7 +69,7 @@ jobs:
   publish:
     name: Publish container
     needs: [test, container]
-    if: github.event_name != 'pull_request' && (github.ref == 'refs/heads/master' || startsWith(github.ref, 'refs/tags/v'))
+    if: github.event_name != 'pull_request' && !startsWith(github.ref, 'refs/tags/v3.') && (github.ref == 'refs/heads/master' || startsWith(github.ref, 'refs/tags/v'))
     runs-on: ubuntu-26.04
     timeout-minutes: 20
     permissions:

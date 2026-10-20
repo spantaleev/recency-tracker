@@ -3,6 +3,10 @@ Recency Tracker
 
 A client + server combo that helps you keep resources up-to-date in realtime.
 
+An unreleased Rust v3 candidate is developed alongside this Node v2 implementation.
+See [the candidate documentation](rust/README.md) for compatibility, validation,
+and native amd64/arm64 release preparation.
+
 A resource could be:
  * a comments list on a news article page
  * the news article's text
@@ -227,7 +231,7 @@ and catching up from filesystem storage.
 
 ### Publishing a release
 
-`package.json` is the version source. Update its version and the matching root
+For Node v2 releases, `package.json` is the version source. Update its version and the matching root
 versions in `package-lock.json` together (for example, with
 `npm version 2.0.1 --no-git-tag-version`), then commit and push the change.
 Push the matching `v2.0.1` Git tag to publish a release image. CI refuses release

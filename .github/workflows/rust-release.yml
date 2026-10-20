@@ -1,0 +1,142 @@
+name: Rust multi-arch release
+
+# Manual runs validate/build only. A deliberate matching v3 tag is required to publish.
+on:
+  workflow_dispatch:
+  push:
+    tags: ['v3.*']
+
+permissions:
+  contents: read
+
+concurrency:
+  group: rust-release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  version:
+    runs-on: ubuntu-24.04
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Verify the manually selected release version
+        id: version
+        env:
+          RELEASE_REF: ${{ github.ref_name }}
+          EVENT_NAME: ${{ github.event_name }}
+        run: |
+          python3 - <<'PY'
+          import os, pathlib, re, tomllib
+          version = tomllib.loads(pathlib.Path('rust/Cargo.toml').read_text())['package']['version']
+          packages = tomllib.loads(pathlib.Path('rust/Cargo.lock').read_text())['package']
+          assert any(p['name'] == 'recency-tracker' and p['version'] == version for p in packages)
+          if os.environ['EVENT_NAME'] == 'push':
+              tag = os.environ['RELEASE_REF']
+              assert re.fullmatch(r'v3\.[0-9]+\.[0-9]+', tag), 'Expected a stable v3 tag'
+              assert tag == 'v' + version, 'Tag must match Cargo.toml and Cargo.lock'
+          with open(os.environ['GITHUB_OUTPUT'], 'a') as output:
+              output.write('version=' + version + '\n')
+          PY
+
+  checks:
+    needs: version
+    uses: ./.github/workflows/rust.yml
+    permissions:
+      contents: read
+
+  publish-platform:
+    needs: [version, checks]
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v3.')
+    permissions:
+      contents: read
+      packages: write
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-24.04
+            arch: amd64
+          - runner: ubuntu-24.04-arm
+            arch: arm64
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: rust-image-${{ matrix.arch }}
+          path: ${{ runner.temp }}/image
+      - uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Publish the exact tested platform image
+        env:
+          ARCH: ${{ matrix.arch }}
+          VERSION: ${{ needs.version.outputs.version }}
+          IMAGE: ghcr.io/spantaleev/recency-tracker
+          ARCHIVE: ${{ runner.temp }}/image/rust-image-${{ matrix.arch }}.tar
+          DIGEST_FILE: ${{ runner.temp }}/${{ matrix.arch }}.digest
+        run: |
+          docker image load --input "$ARCHIVE"
+          actual=$(docker image inspect --format '{{.Os}}/{{.Architecture}}' recency-tracker:rust-candidate)
+          test "$actual" = "linux/$ARCH"
+          arch_image="$IMAGE:$VERSION-$ARCH"
+          docker image tag recency-tracker:rust-candidate "$arch_image"
+          docker image push "$arch_image"
+          docker image inspect "$arch_image" > "$RUNNER_TEMP/pushed-image.json"
+          python3 - <<'PY'
+          import json, os, pathlib, re
+          metadata = json.loads((pathlib.Path(os.environ['RUNNER_TEMP']) / 'pushed-image.json').read_text())[0]
+          pattern = re.escape(os.environ['IMAGE']) + r'@sha256:[0-9a-f]{64}'
+          references = {ref for ref in metadata['RepoDigests'] if re.fullmatch(pattern, ref)}
+          assert len(references) == 1, 'Expected one digest for the published repository'
+          pathlib.Path(os.environ['DIGEST_FILE']).write_text(references.pop() + '\n')
+          PY
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: rust-digest-${{ matrix.arch }}
+          path: ${{ runner.temp }}/${{ matrix.arch }}.digest
+          retention-days: 3
+          if-no-files-found: error
+
+  publish-index:
+    needs: [version, publish-platform]
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v3.')
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          pattern: rust-digest-*
+          merge-multiple: true
+          path: ${{ runner.temp }}/digests
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+      - uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Validate and publish the combined image index
+        env:
+          VERSION: ${{ needs.version.outputs.version }}
+          IMAGE: ghcr.io/spantaleev/recency-tracker
+          DIGESTS: ${{ runner.temp }}/digests
+        run: |
+          amd64=$(cat "$DIGESTS/amd64.digest")
+          arm64=$(cat "$DIGESTS/arm64.digest")
+          docker buildx imagetools create --dry-run "$amd64" "$arm64" > "$RUNNER_TEMP/index.json"
+          python3 rust/release/check-platforms.py < "$RUNNER_TEMP/index.json"
+          minor=${VERSION%.*}
+          docker buildx imagetools create \
+            --tag "$IMAGE:$VERSION" --tag "$IMAGE:$minor" \
+            --tag "$IMAGE:3" --tag "$IMAGE:latest" "$amd64" "$arm64"
+          docker buildx imagetools inspect --raw "$IMAGE:$VERSION" > "$RUNNER_TEMP/published-index.json"
+          python3 rust/release/check-platforms.py < "$RUNNER_TEMP/published-index.json"

@@ -2,8 +2,9 @@
 
 The Rust server is an unreleased replacement candidate. The Node v2 implementation
 remains the reference in this branch; its Dockerfile and release workflow are
-unchanged. This candidate has its own Dockerfile and validation workflow, with no
-image publication. The browser client and PHP publisher work without modification.
+unchanged. This candidate has its own Dockerfile and native validation workflow. A separate v3 release
+workflow publishes only after a deliberate, matching stable v3 tag; manual runs
+perform validation without publishing. The browser client and PHP publisher work without modification.
 
 The implementation forbids unsafe Rust in application code. Typed resource/version
 models validate protocol input. A single tracker task owns cache and subscription
@@ -140,5 +141,18 @@ Cargo dependencies, Rust/musl, build images, Actions and audit tools still requi
 maintenance. Commit `Cargo.lock`, use locked builds, run a current `cargo audit`,
 track builder/toolchain updates through Renovate, and rebuild static binaries for
 security fixes. A scratch image having few OS packages does not make its embedded
-libraries maintenance-free. The candidate workflow intentionally has no registry
-credentials or publishing job; the deferred release/version automation is unchanged.
+libraries maintenance-free. The candidate validation workflow has no registry credentials or publishing job.
+The release workflow builds and tests both architectures natively, transfers the
+exact tested images as artifacts, and only then publishes architecture-specific
+images and their combined index. The index must contain exactly linux/amd64 and
+linux/arm64 before stable tags become visible. No QEMU build is required.
+
+For a future approved v3 release, manually set the Cargo package and matching lockfile
+version, then push the matching stable `v3.X.Y` tag. Release tags publish the exact
+version, minor, `3`, and `latest`, with optional `-amd64` / `-arm64` version tags.
+The Node publishing job excludes v3 tags. Manual runs of `Rust multi-arch release`
+perform the full native validation/artifact build without any registry writes.
+The current version is a development version and cannot satisfy a stable release
+tag. No tag/release is created automatically; deferred version automation remains
+unimplemented. Master/edge still follows the existing Node workflow until a
+separate default-runtime cutover is approved.
