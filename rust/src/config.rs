@@ -5,14 +5,41 @@ use std::{
     time::Duration,
 };
 
+/// A listener address accepted by the old Node server: a literal IP or hostname.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq)]
+#[serde(try_from = "String")]
+pub struct Host(String);
+impl TryFrom<String> for Host {
+    type Error = &'static str;
+    fn try_from(value: String) -> Result<Self, Self::Error> {
+        if value.parse::<IpAddr>().is_ok() {
+            return Ok(Self(value));
+        }
+        if value.is_empty()
+            || value.chars().any(char::is_whitespace)
+            || value
+                .bytes()
+                .any(|byte| matches!(byte, b'/' | b'\\' | b'\0'))
+        {
+            return Err("listener host must be a hostname or IP address");
+        }
+        Ok(Self(value))
+    }
+}
+impl Host {
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
 #[derive(Clone, Deserialize)]
 pub struct Listener {
-    pub ip: IpAddr,
+    pub ip: Host,
     pub port: u16,
 }
 #[derive(Deserialize)]
 struct Publisher {
-    ip: IpAddr,
+    ip: Host,
     port: u16,
     secret: Option<String>,
 }
@@ -129,5 +156,34 @@ mod tests {
         assert_eq!(c.storage, Some(PathBuf::from("/data")));
         assert!(Config::parse(bytes, Some(String::new())).is_err());
         assert!(Config::parse(b"{", None).is_err());
+    }
+    #[test]
+    fn listener_hosts_accept_existing_ip_and_dns_configurations() {
+        for host in ["127.0.0.1", "::1", "localhost", "tracker.example.test"] {
+            let mut json: serde_json::Value =
+                serde_json::from_slice(include_bytes!("../../config/container.json.dist")).unwrap();
+            json["publisher"]["ip"] = host.into();
+            json["subscriber"]["ip"] = host.into();
+            let c = Config::parse(&serde_json::to_vec(&json).unwrap(), Some("override".into()))
+                .unwrap();
+            assert_eq!(c.publisher.ip.as_str(), host);
+            assert_eq!(c.subscriber.ip.as_str(), host);
+        }
+    }
+    #[test]
+    fn listener_hosts_reject_obviously_invalid_values() {
+        for host in [
+            "",
+            " localhost",
+            "localhost ",
+            "host/path",
+            "host\\name",
+            "host\0name",
+        ] {
+            assert!(
+                Host::try_from(host.to_owned()).is_err(),
+                "accepted {host:?}"
+            );
+        }
     }
 }

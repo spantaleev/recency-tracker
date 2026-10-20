@@ -14,6 +14,7 @@ const { WebSocket } = require('ws');
 const run = promisify(execFile);
 const root = path.resolve(__dirname, '../..');
 const implementation = process.env.RECENCY_TEST_IMPLEMENTATION || 'rust';
+const nodeRoot = path.resolve(process.env.RECENCY_TEST_NODE_ROOT || path.join(root, 'node-reference'));
 const secret = 'test-secret/with&punctuation\\and$quotes"';
 const timeout = () => ({ signal: AbortSignal.timeout(5000) });
 async function until(check, milliseconds = 5000) {
@@ -21,16 +22,16 @@ async function until(check, milliseconds = 5000) {
  while (!(await check())) { assert(Date.now() < end, 'Timed out waiting for expected behavior'); await delay(10); }
 }
 async function freePort() { const s=net.createServer(); s.listen(0,'127.0.0.1');await once(s,'listening');const p=s.address().port;await new Promise(r=>s.close(r));return p; }
-async function fixture(t, {limits, filesystem=true} = {}) {
+async function fixture(t, {limits, filesystem=true, listenerHost='127.0.0.1'} = {}) {
  const directory=await fs.mkdtemp(path.join(os.tmpdir(),'recency-contract-'));
  const storage=path.join(directory,'data');await fs.mkdir(storage);
- const config={publisher:{ip:'127.0.0.1',port:await freePort(),secret:'overridden'},subscriber:{ip:'127.0.0.1',port:await freePort()},persister:{type:filesystem?'filesystem':'none',memory:{maxItems:2},filesystem:{storagePath:storage}},...(limits?{limits}:{})};
+ const config={publisher:{ip:listenerHost,port:await freePort(),secret:'overridden'},subscriber:{ip:listenerHost,port:await freePort()},persister:{type:filesystem?'filesystem':'none',memory:{maxItems:2},filesystem:{storagePath:storage}},...(limits?{limits}:{})};
  const configFile=path.join(directory,'config.json');await fs.writeFile(configFile,JSON.stringify(config));
  let child; const sockets=[];
- const pub=`http://127.0.0.1:${config.publisher.port}`,sub=`http://127.0.0.1:${config.subscriber.port}`;
+ const pub=`http://${listenerHost}:${config.publisher.port}`,sub=`http://${listenerHost}:${config.subscriber.port}`;
  async function start(selected=implementation) {
   const command=selected==='node'?process.execPath:path.join(root,'rust/target/debug/recency-tracker');
-  child=spawn(command,selected==='node'?['bin/server']:[],{cwd:root,env:{...process.env,RECENCY_TRACKER_CONFIG:configFile,RECENCY_TRACKER_PUBLISHER_SECRET:secret},stdio:['ignore','ignore','pipe']});
+  child=spawn(command,selected==='node'?['bin/server']:[],{cwd:selected==='node'?nodeRoot:root,env:{...process.env,RECENCY_TRACKER_CONFIG:configFile,RECENCY_TRACKER_PUBLISHER_SECRET:secret},stdio:['ignore','ignore','pipe']});
   let logs='';child.stderr.on('data',d=>{logs=(logs+d).slice(-4000);});
   await until(async()=>{assert.equal(child.exitCode,null,logs);try{return (await fetch(pub+'/ping',timeout())).ok;}catch{return false;}});
  }
@@ -53,6 +54,24 @@ test('health, client asset, authentication and ordinary publisher errors',async 
  }
  const body=new URLSearchParams({secret,resource:'/example',version:'1'}).toString()+'&secret='+encodeURIComponent(secret);
  const duplicate=await fetch(f.pub+'/publish',{method:'POST',headers:{'content-type':'application/x-www-form-urlencoded'},body,...timeout()});assert.deepEqual(await duplicate.json(),{ok:false,error:'bad secret'});
+});
+
+test('listener hostnames and trailing slashes retain the v2 HTTP behavior',async t=>{
+ const f=await fixture(t,{listenerHost:'localhost'});
+ assert.equal(await(await fetch(f.pub+'/ping/')).text(),'publisher server up');
+ assert.equal(await(await fetch(f.sub+'/ping/')).text(),'subscriber server up');
+ assert.equal(await(await fetch(f.pub+'/PING/')).text(),'publisher server up');
+ assert.equal(await(await fetch(f.sub+'/PING/')).text(),'subscriber server up');
+ const response=await fetch(f.pub+'/publish/',{method:'POST',body:new URLSearchParams({secret,resource:'/example/slash',version:'1'}),...timeout()});
+ assert.equal(response.status,200);
+ assert.deepEqual(await response.json(),{ok:true});
+ const uppercase=await fetch(f.pub+'/PUBLISH/',{method:'POST',body:new URLSearchParams({secret,resource:'/example/uppercase',version:'1'}),...timeout()});
+ assert.equal(uppercase.status,200);
+ assert.deepEqual(await uppercase.json(),{ok:true});
+ const c=await f.connect();c.send({type:'subscribe',resource:'/example/slash',version:'0'});
+ await until(()=>c.messages.length===1);assert.equal(c.messages[0].version,'1');
+ c.send({type:'subscribe',resource:'/example/uppercase',version:'0'});
+ await until(()=>c.messages.length===2);assert.equal(c.messages[1].resource,'/example/uppercase');
 });
 
 test('version ordering, numeric coercion, duplicate subscriptions and unsubscribe',async t=>{
@@ -96,7 +115,7 @@ test('existing PHP publisher works without modifications', {skip:!process.env.RE
  const f=await fixture(t),c=await f.connect();const resource='/example/php';c.send({type:'subscribe',resource,version:0});
  const source=process.env.RECENCY_TEST_PHP_SOURCE;
  const script='require $argv[1]."/Exception.php"; require $argv[1]."/Publisher.php"; $publisher=new \\Devture\\Component\\RecencyTracker\\Publisher($argv[2],$argv[3]); $publisher->publish("/example/php", 42, ["actor"=>"example-user","nested"=>["flag"=>true]]);';
- await run('php',['-r',script,source,f.pub+'/publish',secret],{timeout:10000});await until(()=>c.messages.length===1);
+ await run('php',['-r',script,source,f.pub+'/PUBLISH/',secret],{timeout:10000});await until(()=>c.messages.length===1);
  assert.deepEqual(c.messages[0],{type:'update',resource,version:'42',data:{actor:'example-user',nested:{flag:true}}});
 });
 
@@ -120,6 +139,19 @@ test('connection and subscription limits close clients explicitly', {skip:implem
  const second=new WebSocket(f.sub.replace('http:','ws:')+'/subscribe');second.on('error',()=>{});await assert.rejects(once(second,'open',timeout()),/503/);second.terminate();
  first.send({type:'subscribe',resource:'/example/one',version:'0'});const closed=once(first.socket,'close',timeout());first.send({type:'subscribe',resource:'/example/two',version:'0'});assert.equal((await closed)[0],1013);
  const fresh=await f.connect();fresh.send({type:'subscribe',resource:'/example/one',version:'0'});await f.publish('/example/one','1');await until(()=>fresh.messages.length===1);
+});
+
+test('browser reconnects after a subscription limit closes its socket', {skip:implementation!=='rust'},async t=>{
+ const f=await fixture(t,{limits:{subscriptions_per_connection:2}});let reconnect;
+ const browser=vm.createContext({WebSocket:global.WebSocket,URL});browser.window=browser;browser.location={href:'http://example.test/page'};browser.setTimeout=cb=>{reconnect=cb;return 1;};browser.clearTimeout=()=>{reconnect=null;};
+ vm.runInContext(await fs.readFile(path.join(root,'resources/static/recency-tracker.js'),'utf8'),browser);
+ const client=new browser.RecencyTracker(f.sub+'/subscribe');const resources=['/example/one','/example/two','/example/overflow'];
+ t.after(()=>{for(const resource of resources)client.unsubscribe(resource);});
+ const updates=[];for(const resource of resources)client.subscribe(resource,'0',(v,d)=>updates.push({resource,v,d}));
+ await until(()=>!!reconnect);client.unsubscribe('/example/overflow');reconnect();
+ await f.publish('/example/one','1',{recovered:true});await until(()=>updates.length===1);
+ assert.equal(updates[0].resource,'/example/one');assert.equal(updates[0].v,'1');
+ assert.deepEqual(JSON.parse(JSON.stringify(updates[0].d)),{recovered:true});
 });
 
 

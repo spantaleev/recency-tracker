@@ -45,8 +45,8 @@ impl Server {
     pub async fn start(config: Config) -> io::Result<Self> {
         let storage = Storage::open(config.storage)?;
         // Bind both listeners before spawning any work, so partial startup cleans up.
-        let publisher = TcpListener::bind((config.publisher.ip, config.publisher.port)).await?;
-        let subscriber = TcpListener::bind((config.subscriber.ip, config.subscriber.port)).await?;
+        let publisher = TcpListener::bind((config.publisher.ip.as_str(), config.publisher.port)).await?;
+        let subscriber = TcpListener::bind((config.subscriber.ip.as_str(), config.subscriber.port)).await?;
         let publisher_addr = publisher.local_addr()?;
         let subscriber_addr = subscriber.local_addr()?;
         let (tracker, actor) = Tracker::start(storage, config.cache_items, config.limits);
@@ -63,6 +63,7 @@ impl Server {
             .layer(DefaultBodyLimit::max(100 * 1024))
             .layer(middleware::from_fn(deadline))
             .with_state(app.clone());
+        let publisher_app = Router::new().fallback_service(publisher_app).layer(middleware::from_fn(canonical_paths));
         let subscriber_app = Router::new()
             .route("/ping", get(|| async { "subscriber server up" }))
             .route("/subscribe", get(upgrade))
@@ -87,6 +88,7 @@ impl Server {
             })
             .layer(middleware::from_fn(deadline))
             .with_state(app);
+        let subscriber_app = Router::new().fallback_service(subscriber_app).layer(middleware::from_fn(canonical_paths));
         let mut pub_stop = stop_rx.clone();
         let mut sub_stop = stop_rx;
         let http = tokio::spawn(async move {
@@ -119,6 +121,29 @@ impl Server {
         self.actor.await.map_err(io::Error::other)?;
         result
     }
+}
+// Express accepted case-insensitive dynamic HTTP routes and one trailing slash.
+// Normalize only these known routes before the inner router dispatches them.
+async fn canonical_paths(mut request: axum::extract::Request, next: Next) -> Response {
+    let path = request.uri().path();
+    let path = path.strip_suffix('/').unwrap_or(path);
+    let canonical = if path.eq_ignore_ascii_case("/publish") {
+        Some("/publish")
+    } else if path.eq_ignore_ascii_case("/ping") {
+        Some("/ping")
+    } else {
+        None
+    };
+    if let Some(path) = canonical {
+        let mut parts = request.uri().clone().into_parts();
+        let target = match request.uri().query() {
+            Some(query) => format!("{path}?{query}"),
+            None => path.to_owned(),
+        };
+        parts.path_and_query = Some(target.parse().expect("valid original query"));
+        *request.uri_mut() = axum::http::Uri::from_parts(parts).expect("valid original URI");
+    }
+    next.run(request).await
 }
 async fn deadline(request: axum::extract::Request, next: Next) -> Response {
     match tokio::time::timeout(REQUEST_TIMEOUT, next.run(request)).await {
