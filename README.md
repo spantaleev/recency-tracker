@@ -142,6 +142,65 @@ The only way to get around that limitation is to have the application server kno
 Installation
 ------------
 
+### Container (recommended for self-hosting)
+
+Images are published to `ghcr.io/spantaleev/recency-tracker` for Linux amd64 and
+arm64. Use an exact release tag such as `2.0.0` for deliberate upgrades. The `2.0`,
+`2`, and `latest` tags follow stable releases; `edge` follows the development branch.
+
+Copy `config/container.json.dist` to a local `config.json` and **change the publishing
+secret**, or supply it through `RECENCY_TRACKER_PUBLISHER_SECRET`. This configuration
+binds both servers to the container network and stores resource files in `/data`.
+The image requires a configuration mount; it does not include a default secret.
+
+Example Compose service, with a private publishing endpoint and a subscriber port
+bound to localhost for a reverse proxy:
+
+```yaml
+services:
+  recency-tracker:
+    image: ghcr.io/spantaleev/recency-tracker:2.0.0
+    restart: unless-stopped
+    read_only: true
+    ports:
+      - "127.0.0.1:9999:9999"
+    volumes:
+      - ./config.json:/config/config.json:ro
+      - ./data:/data
+```
+
+Create the host `data` directory before starting the service, and make it writable
+by UID/GID `1000:1000` (the image's default `node` user). An explicit Compose `user`
+can select a different UID/GID; that user must be able to read the configuration
+and write the storage directory **and any existing resource files**. The image runs
+directly as Node.js and works with a read-only root filesystem.
+
+Applications on the same Compose network publish to
+`http://recency-tracker:9998/publish`. Keep that port private to applications that
+know the secret; it does not need a host port mapping. If the publisher runs on
+the host, add `127.0.0.1:9998:9998`. Put TLS and WebSocket proxying in front of the
+subscriber endpoint for public browser connections (see the upgrade notes below).
+Both servers offer `/ping` for HTTP health checks.
+
+To migrate existing storage, mount the directory containing the resource `.json`
+files at `/data`; no file conversion is needed. Stop the old tracker before starting
+its replacement, and deploy a matching browser client when upgrading from v1.
+The browser client is served at `/recency-tracker.js`, or can be copied from
+`resources/static/recency-tracker.js` into your application's assets.
+
+To build and check the image locally:
+
+```sh
+docker build -t recency-tracker:local .
+node scripts/smoke-container.js recency-tracker:local
+```
+
+The smoke check uses temporary storage and containers. It verifies authenticated
+publishing, WebSocket delivery, persistence after replacing the container, read-only
+mounts, and an arbitrary runtime UID. Node.js 22 or newer and Docker are required.
+
+### Running directly with Node.js
+
  * Make sure you have [Node.js](https://nodejs.org/) 22 or newer installed
  * Clone this repository
  * Run `npm install` to install the required dependencies

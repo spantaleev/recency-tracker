@@ -1,0 +1,12 @@
+# Only runtime source and the dependency lockfile belong in the build context.
+**
+!package.json
+!package-lock.json
+!LICENSE.txt
+!bin/
+!bin/server
+!lib/
+!lib/**
+!resources/
+!resources/static/
+!resources/static/**
