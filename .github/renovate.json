@@ -5,7 +5,19 @@
 		"helpers:pinGitHubActionDigests"
 	],
 	"labels": ["dependencies"],
-	"rangeStrategy": "pin",
+	"packageRules": [
+		{
+			"matchManagers": ["npm"],
+			"matchDepTypes": ["dependencies", "devDependencies", "optionalDependencies"],
+			"rangeStrategy": "pin"
+		},
+		{
+			"description": "The minimum supported Node.js version is maintained alongside the CI runtime matrix.",
+			"matchManagers": ["npm"],
+			"matchDepTypes": ["engines"],
+			"enabled": false
+		}
+	],
 	"prConcurrentLimit": 3,
 	"rebaseWhen": "behind-base-branch",
 	"automerge": false,
