@@ -24,6 +24,7 @@
 	"optionalDependencies": {},
 	"devDependencies": {},
 	"scripts": {
-		"start": "node bin/server"
+		"start": "node bin/server",
+		"test": "node --test"
 	}
 }

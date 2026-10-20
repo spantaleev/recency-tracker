@@ -144,3 +144,10 @@ Installation
 
 In practice, you may wish to run the server process under a process manager, such as [supervisord](http://supervisord.org/).
 For a sample configuration, see `resources/supervisord-config.conf`.
+
+
+Testing
+-------
+
+Run `npm test` after installing dependencies. Tests use Node.js's built-in test runner
+and temporary local HTTP servers; no running tracker or configuration file is required.
