@@ -1,10 +1,8 @@
-# Rust v3 candidate
+# Rust v3 implementation
 
-The Rust server is an unreleased replacement candidate. The Node v2 implementation
-remains the reference in this branch; its Dockerfile and release workflow are
-unchanged. This candidate has its own Dockerfile and native validation workflow. A separate v3 release
-workflow publishes only after a deliberate, matching stable v3 tag; manual runs
-perform validation without publishing. The browser client and PHP publisher work without modification.
+The Rust server replaces the Node v2 runtime. The browser client and PHP publisher
+work without modification. Linux amd64 and arm64 images are built and tested on
+native runners; publication transfers those exact images into a combined index.
 
 The implementation forbids unsafe Rust in application code. Typed resource/version
 models validate protocol input. A single tracker task owns cache and subscription
@@ -21,6 +19,9 @@ cargo +1.98.0 clippy --manifest-path rust/Cargo.toml --locked --all-targets -- -
 cargo +1.98.0 test --manifest-path rust/Cargo.toml --locked
 cargo +1.98.0 build --manifest-path rust/Cargo.toml --locked
 npm ci --engine-strict
+npm test
+# Check out v2.0.0 (3bdfc00524e977d502ca6614642d6a302d51e00f) into node-reference/
+# and run npm ci --prefix node-reference before comparing both implementations.
 RECENCY_TEST_IMPLEMENTATION=node node --test rust/contract/suite.cjs
 RECENCY_TEST_IMPLEMENTATION=rust node --test rust/contract/suite.cjs
 ```
@@ -33,8 +34,8 @@ a pinned publisher source revision. The contract suite checks both implementatio
 additional Rust checks cover explicit limits and storage failure recovery.
 
 ```sh
-docker build -f rust/Dockerfile -t recency-tracker:rust-candidate .
-node rust/contract/smoke-container.cjs recency-tracker:rust-candidate
+docker build -t recency-tracker:rust-candidate .
+node scripts/smoke-container.js recency-tracker:rust-candidate
 ```
 
 The pinned Rust Alpine builder produces a static musl executable; the runtime image
@@ -48,7 +49,7 @@ validation promise.
 Use the existing configuration schema and mounts: set `RECENCY_TRACKER_CONFIG`,
 mount `/config/config.json` read-only, and provide writable `/data`. An explicitly
 empty `RECENCY_TRACKER_PUBLISHER_SECRET` prevents startup. Both listener `ip` fields
-must be literal IP addresses. Bind publisher port 9998 privately; expose subscriber
+accept literal IP addresses or resolvable hostnames. Bind publisher port 9998 privately; expose subscriber
 port 9999 through a TLS/WebSocket reverse proxy. `/ping` and `/recency-tracker.js`
 keep their existing paths and bodies. Explicit UID/GID selection and a read-only
 root filesystem are supported. The storage directory must already exist.
@@ -67,10 +68,15 @@ Optional `limits` settings supplement existing configuration:
 ```
 
 All values must be positive. Upper bounds are 1,000,000 connections, 65,536
-subscriptions, 65,536 queued messages and 64 MiB queued bytes per connection. A
-connection limit rejects new upgrades with HTTP 503. Subscription or outbound queue
+subscriptions, 65,536 queued messages and 64 MiB queued bytes per connection. Each listener also bounds accepted TCP connections to `connections + 32` (handshake
+headroom), including incomplete HTTP
+requests and upgraded WebSockets. Exhausted TCP admission closes new connections;
+tracker admission rejects upgrades with HTTP 503. HTTP headers must arrive within
+ten seconds. Subscription or outbound queue
 limits close the socket with 1013; the unchanged browser client reconnects and
-catches up from its last seen version. Queue bytes are charged per client even
+catches up from its last seen version. A page exceeding the subscription limit
+will repeatedly reconnect until its subscription count or the configured limit
+changes; size this limit for your application before upgrading. Queue bytes are charged per client even
 though fan-out shares immutable message strings. A socket write has a five-second
 timeout. Incoming messages remain limited to 64 KiB; the initial read buffer is
 4 KiB and may grow for larger messages. There is no WebSocket compression.
@@ -109,11 +115,13 @@ Intentional cleanup changes affect ambiguous input and failure handling:
   bodies are not Express HTML. Compressed request bodies receive HTTP 415.
 - JSON parsers enforce their nesting/range/Unicode constraints. Corrupt or invalid
   persisted JSON is an error, not an unknown resource. Persisted reads are bounded
-  to 1 MiB. Only the documented browser asset is served; Express-specific cache,
+  to 1 MiB; nonregular files and, on Unix, symlinks are rejected. Only the documented browser asset is served; Express-specific cache,
   range, ETag, redirect and error-page behavior is not reproduced.
 - Storage failures return HTTP 500 without announcing a successful publication.
   Subscriber storage errors close with 1011. Requests have a ten-second deadline;
   accepted tracker work continues if its HTTP client disconnects or times out.
+  Subscription operations also have a ten-second deadline and remain cancellable
+  by shutdown.
 
 Filesystem mode holds an exclusive advisory lock in `.recency-tracker.lock`; use a
 local filesystem that supports locking, atomic rename and sync. Atomic same-directory
@@ -123,10 +131,13 @@ replacements preserve explicit file permissions. Rename creates a new inode owne
 by the selected process UID; ACLs, ownership and hard links are not preserved as
 metadata. Temporary files left by a killed process are ignored. A failed response
 can still mean a rename completed before a later directory-sync failure: consumers
-must not infer that failure proves no state change.
+must not infer that failure proves no state change. On a write error the cache
+entry is invalidated and affected subscribers are disconnected to reload persisted
+state on reconnect.
 
 SIGTERM/SIGINT stop listeners, close live sockets, let active HTTP work finish, and
-then drain ordered storage operations. Shutdown has a fifteen-second deadline. An
+then drain ordered storage operations. Shutdown allows fifteen seconds for graceful work and then ends runtime cleanup
+without waiting for stalled blocking filesystem operations. An
 abrupt process kill or unavailable filesystem cannot guarantee acknowledgment or
 completion, but committed records are not rewritten in place.
 
@@ -134,25 +145,22 @@ Before any deployment, retain the exact v2 image and browser asset, test upgrade
 rollback with a copied state directory, then stop the old writer before switching.
 Never run Node and Rust against the same writable directory; Node does not honor the
 new lock. No data conversion is required for compatible records. Keep the unchanged
-browser/PHP integration in place while testing the replacement. Publication and any
-runtime upgrade require a separate decision.
+browser/PHP integration in place while testing the replacement.
 
 Cargo dependencies, Rust/musl, build images, Actions and audit tools still require
 maintenance. Commit `Cargo.lock`, use locked builds, run a current `cargo audit`,
 track builder/toolchain updates through Renovate, and rebuild static binaries for
 security fixes. A scratch image having few OS packages does not make its embedded
-libraries maintenance-free. The candidate validation workflow has no registry credentials or publishing job.
+libraries maintenance-free. The validation workflow has no registry credentials or publishing job.
 The release workflow builds and tests both architectures natively, transfers the
 exact tested images as artifacts, and only then publishes architecture-specific
 images and their combined index. The index must contain exactly linux/amd64 and
 linux/arm64 before stable tags become visible. No QEMU build is required.
 
-For a future approved v3 release, manually set the Cargo package and matching lockfile
-version, then push the matching stable `v3.X.Y` tag. Release tags publish the exact
-version, minor, `3`, and `latest`, with optional `-amd64` / `-arm64` version tags.
-The Node publishing job excludes v3 tags. Manual runs of `Rust multi-arch release`
-perform the full native validation/artifact build without any registry writes.
-The current version is a development version and cannot satisfy a stable release
-tag. No tag/release is created automatically; deferred version automation remains
-unimplemented. Master/edge still follows the existing Node workflow until a
-separate default-runtime cutover is approved.
+For a release, manually set the Cargo package and matching lockfile version, then
+push the matching stable `v3.X.Y` tag. Release tags publish the exact version, minor,
+`3`, and `latest`, with optional `-amd64` / `-arm64` version tags. Publication is
+serialized, checks the tested child digests and verifies the final aliases. An
+older stable tag cannot move aliases behind a newer stable Git tag. Manual runs of
+`Rust multi-arch release` perform validation without registry writes. Master pushes
+publish `edge` after native validation. No tag/release is created automatically.

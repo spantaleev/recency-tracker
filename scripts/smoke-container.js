@@ -95,7 +95,7 @@ async function main() {
 	assert.equal(docker('inspect', '--format', '{{.State.ExitCode}}', name), '0');
 	docker('rm', name);
 	const restarted = await start('12345:12345');
-	assert.equal(docker('exec', name, 'node', '-p', 'process.getuid()'), '12345');
+	assert.equal(docker('inspect', '--format', '{{.Config.User}}', name), '12345:12345');
 	const catchUp = await subscribe(restarted.subscriber, '0');
 	assert.deepEqual(await catchUp(), expected);
 	const customResource = resource + '/custom-user';

@@ -1,18 +1,10 @@
-name: Rust candidate
+name: Rust validation
 
 on:
   workflow_call:
-  pull_request:
-  workflow_dispatch:
-  push:
-    branches: ['rewrite/**']
 
 permissions:
   contents: read
-
-concurrency:
-  group: rust-${{ github.ref }}
-  cancel-in-progress: true
 
 jobs:
   candidate:
@@ -37,11 +29,19 @@ jobs:
           ref: 3eefe7a453170a5adac57d9ba57307728a9e0a51
           path: php-publisher-reference
           persist-credentials: false
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: spantaleev/recency-tracker
+          ref: 3bdfc00524e977d502ca6614642d6a302d51e00f
+          path: node-reference
+          persist-credentials: false
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: 24
           cache: npm
       - run: npm ci --engine-strict
+      - run: npm ci --prefix node-reference --engine-strict
+      - run: npm test
       - run: python3 -m unittest discover -s rust/release -p 'test_*.py'
       - name: Install pinned Rust toolchain
         run: rustup toolchain install 1.98.0 --profile minimal --component rustfmt --component clippy
@@ -51,6 +51,7 @@ jobs:
       - run: cargo +1.98.0 build --manifest-path rust/Cargo.toml --locked
       - name: Test generic consumer compatibility against Node and Rust
         env:
+          RECENCY_TEST_NODE_ROOT: ${{ github.workspace }}/node-reference
           RECENCY_TEST_PHP_SOURCE: ${{ github.workspace }}/php-publisher-reference/src/Devture/Component/RecencyTracker
         run: |
           php --version
@@ -60,13 +61,13 @@ jobs:
       - uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
         with:
           context: .
-          file: rust/Dockerfile
+          file: Dockerfile
           load: true
           push: false
           tags: recency-tracker:rust-candidate
           cache-from: type=gha,scope=rust-${{ matrix.arch }}
           cache-to: type=gha,mode=max,scope=rust-${{ matrix.arch }}
-      - run: node rust/contract/smoke-container.cjs recency-tracker:rust-candidate
+      - run: node scripts/smoke-container.js recency-tracker:rust-candidate
       - name: Export the tested image for release assembly
         env:
           ARCHIVE: ${{ runner.temp }}/rust-image-${{ matrix.arch }}.tar
@@ -76,4 +77,5 @@ jobs:
           name: rust-image-${{ matrix.arch }}
           path: ${{ runner.temp }}/rust-image-${{ matrix.arch }}.tar
           retention-days: 3
+          overwrite: true
           if-no-files-found: error

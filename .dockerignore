@@ -1,12 +1,12 @@
-# Only runtime source and the dependency lockfile belong in the build context.
 **
-!package.json
-!package-lock.json
-!LICENSE.txt
-!bin/
-!bin/server
-!lib/
-!lib/**
+!rust/
+!rust/Cargo.toml
+!rust/Cargo.lock
+!rust/src/
+!rust/src/**
+!rust/container/
+!rust/container/**
 !resources/
 !resources/static/
 !resources/static/**
+!LICENSE.txt

@@ -1,0 +1,193 @@
+name: Publish tested images
+
+on:
+  workflow_call:
+    inputs:
+      channel:
+        required: true
+        type: string
+      version:
+        default: ''
+        type: string
+
+permissions:
+  contents: read
+  packages: write
+
+# Edge and stable publications share this lock, including their platform uploads.
+# Callers must not cancel a running publication when newer validation starts.
+concurrency:
+  group: recency-tracker-image-publishing
+  cancel-in-progress: false
+
+jobs:
+  prepare:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    outputs:
+      eligible: ${{ steps.prepare.outputs.eligible }}
+      base: ${{ steps.prepare.outputs.base }}
+      aliases: ${{ steps.prepare.outputs.aliases }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Guard the explicitly requested publication
+        id: prepare
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          CHANNEL: ${{ inputs.channel }}
+          VERSION: ${{ inputs.version }}
+          RELEASE_REF: ${{ github.ref_name }}
+          EVENT_NAME: ${{ github.event_name }}
+        run: |
+          python3 - <<'PYTHON'
+          import json, os, pathlib, re, subprocess, tomllib
+          def api(path):
+              return subprocess.check_output(['gh', 'api', path], text=True)
+          repository = os.environ['GITHUB_REPOSITORY']
+          assert os.environ['EVENT_NAME'] == 'push', 'Only explicit pushes can publish'
+          if os.environ['CHANNEL'] == 'edge':
+              assert os.environ['GITHUB_REF'] == 'refs/heads/master'
+              head = json.loads(api(f'repos/{repository}/git/ref/heads/master'))['object']['sha']
+              eligible = head == os.environ['GITHUB_SHA']
+              base, aliases = 'edge-' + os.environ['GITHUB_SHA'], ['edge']
+              if not eligible:
+                  print('Skipping obsolete master build; a newer commit now owns edge.')
+          else:
+              assert os.environ['CHANNEL'] == 'stable', 'Unknown publication channel'
+              version = os.environ['VERSION']
+              assert re.fullmatch(r'3\.[0-9]+\.[0-9]+', version), 'Expected a manually selected stable v3 version'
+              assert os.environ['GITHUB_REF'] == 'refs/tags/v' + version
+              manifest = tomllib.loads(pathlib.Path('rust/Cargo.toml').read_text())
+              lock = tomllib.loads(pathlib.Path('rust/Cargo.lock').read_text())
+              assert manifest['package']['version'] == version
+              assert any(p['name'] == 'recency-tracker' and p['version'] == version for p in lock['package'])
+              refs = subprocess.check_output(['gh', 'api', '--paginate', f'repos/{repository}/git/matching-refs/tags/v3.', '--jq', '.[].ref'], text=True).splitlines()
+              selected = tuple(map(int, version.split('.')))
+              for ref in refs:
+                  match = re.fullmatch(r'refs/tags/v(3\.[0-9]+\.[0-9]+)', ref)
+                  assert not match or tuple(map(int, match[1].split('.'))) <= selected, 'A newer manual v3 tag exists; refusing to move stable aliases backward'
+              eligible = True
+              base, aliases = version, [version.rsplit('.', 1)[0], '3', 'latest']
+          with open(os.environ['GITHUB_OUTPUT'], 'a') as output:
+              output.write(f'eligible={str(eligible).lower()}\nbase={base}\naliases={" ".join(aliases)}\n')
+          PYTHON
+
+  publish-platform:
+    needs: prepare
+    if: needs.prepare.outputs.eligible == 'true'
+    timeout-minutes: 10
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-24.04
+            arch: amd64
+          - runner: ubuntu-24.04-arm
+            arch: arm64
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: rust-image-${{ matrix.arch }}
+          path: ${{ runner.temp }}/image
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+      - uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Publish or reuse the exact tested platform image
+        env:
+          ARCH: ${{ matrix.arch }}
+          BASE: ${{ needs.prepare.outputs.base }}
+          IMAGE: ghcr.io/spantaleev/recency-tracker
+          ARCHIVE: ${{ runner.temp }}/image/rust-image-${{ matrix.arch }}.tar
+          DIGEST_FILE: ${{ runner.temp }}/${{ matrix.arch }}.digest
+        run: |
+          docker image load --input "$ARCHIVE"
+          actual=$(docker image inspect --format '{{.Os}}/{{.Architecture}}' recency-tracker:rust-candidate)
+          test "$actual" = "linux/$ARCH"
+          arch_image="$IMAGE:$BASE-$ARCH"
+          image_id=$(docker image inspect --format '{{.Id}}' recency-tracker:rust-candidate)
+          if docker buildx imagetools inspect --raw "$arch_image" > "$RUNNER_TEMP/existing.json" 2> "$RUNNER_TEMP/inspect-error"; then
+            # Never overwrite a version/SHA tag with different image content on reruns.
+            existing_id=$(python3 -c 'import json,sys; print(json.load(sys.stdin)["config"]["digest"])' < "$RUNNER_TEMP/existing.json")
+            test "$existing_id" = "$image_id"
+            digest=$(docker buildx imagetools inspect "$arch_image" --format '{{.Manifest.Digest}}')
+            printf '%s@%s\n' "$IMAGE" "$digest" > "$DIGEST_FILE"
+          else
+            cat "$RUNNER_TEMP/inspect-error"
+            # Network/authentication errors must fail closed rather than overwrite tags.
+            python3 -c 'import pathlib,re,sys; sys.exit(not re.search(r"manifest unknown|not found", pathlib.Path(sys.argv[1]).read_text()))' "$RUNNER_TEMP/inspect-error"
+            docker image tag recency-tracker:rust-candidate "$arch_image"
+            docker image push "$arch_image"
+            docker image inspect "$arch_image" > "$RUNNER_TEMP/pushed-image.json"
+            python3 - <<'PYTHON'
+          import json, os, pathlib, re
+          metadata = json.loads((pathlib.Path(os.environ['RUNNER_TEMP']) / 'pushed-image.json').read_text())[0]
+          pattern = re.escape(os.environ['IMAGE']) + r'@sha256:[0-9a-f]{64}'
+          references = {ref for ref in metadata['RepoDigests'] if re.fullmatch(pattern, ref)}
+          assert len(references) == 1, 'Expected one digest for the published repository'
+          pathlib.Path(os.environ['DIGEST_FILE']).write_text(references.pop() + '\n')
+          PYTHON
+          fi
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: rust-digest-${{ matrix.arch }}
+          path: ${{ runner.temp }}/${{ matrix.arch }}.digest
+          retention-days: 3
+          overwrite: true
+          if-no-files-found: error
+
+  publish-index:
+    needs: [prepare, publish-platform]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          pattern: rust-digest-*
+          merge-multiple: true
+          path: ${{ runner.temp }}/digests
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+      - uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Validate and publish the combined image index and aliases
+        env:
+          BASE: ${{ needs.prepare.outputs.base }}
+          ALIASES: ${{ needs.prepare.outputs.aliases }}
+          IMAGE: ghcr.io/spantaleev/recency-tracker
+          DIGESTS: ${{ runner.temp }}/digests
+        run: |
+          amd64=$(cat "$DIGESTS/amd64.digest")
+          arm64=$(cat "$DIGESTS/arm64.digest")
+          docker buildx imagetools create --dry-run "$amd64" "$arm64" > "$RUNNER_TEMP/index.json"
+          python3 rust/release/check-platforms.py --amd64 "$amd64" --arm64 "$arm64" < "$RUNNER_TEMP/index.json"
+          if docker buildx imagetools inspect --raw "$IMAGE:$BASE" > "$RUNNER_TEMP/published-index.json" 2> "$RUNNER_TEMP/inspect-error"; then
+            python3 rust/release/check-platforms.py --amd64 "$amd64" --arm64 "$arm64" < "$RUNNER_TEMP/published-index.json"
+          else
+            cat "$RUNNER_TEMP/inspect-error"
+            python3 -c 'import pathlib,re,sys; sys.exit(not re.search(r"manifest unknown|not found", pathlib.Path(sys.argv[1]).read_text()))' "$RUNNER_TEMP/inspect-error"
+            docker buildx imagetools create --tag "$IMAGE:$BASE" \
+              --annotation "index:org.opencontainers.image.version=$BASE" "$amd64" "$arm64"
+            docker buildx imagetools inspect --raw "$IMAGE:$BASE" > "$RUNNER_TEMP/published-index.json"
+            python3 rust/release/check-platforms.py --amd64 "$amd64" --arm64 "$arm64" < "$RUNNER_TEMP/published-index.json"
+          fi
+          index_digest=$(docker buildx imagetools inspect "$IMAGE:$BASE" --format '{{.Manifest.Digest}}')
+          [[ "$index_digest" =~ ^sha256:[0-9a-f]{64}$ ]]
+          tags=()
+          for alias in $ALIASES; do tags+=(--tag "$IMAGE:$alias"); done
+          docker buildx imagetools create "${tags[@]}" "$IMAGE@$index_digest"
+          for alias in "$BASE" $ALIASES; do
+            actual=$(docker buildx imagetools inspect "$IMAGE:$alias" --format '{{.Manifest.Digest}}')
+            test "$actual" = "$index_digest"
+          done
+          printf 'Verified %s@%s (%s %s)\n' "$IMAGE" "$index_digest" "$BASE" "$ALIASES"

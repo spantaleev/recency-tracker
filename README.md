@@ -3,9 +3,10 @@ Recency Tracker
 
 A client + server combo that helps you keep resources up-to-date in realtime.
 
-An unreleased Rust v3 candidate is developed alongside this Node v2 implementation.
-See [the candidate documentation](rust/README.md) for compatibility, validation,
-and native amd64/arm64 release preparation.
+The v3 server is implemented in Rust. The browser JavaScript client and existing
+[PHP publisher](https://github.com/spantaleev/recency-tracker-publisher-php) retain
+their v2 APIs. See [implementation and compatibility notes](rust/README.md) for
+limits, persistence guarantees and native amd64/arm64 validation.
 
 A resource could be:
  * a comments list on a news article page
@@ -114,7 +115,7 @@ Flow:
 Resources
 ---------
 
-A resource has a **name** (any string) and a **version** (string or integer).
+A resource has a **name** (a string starting with `/`) and a **version** (string or integer).
 
 Name examples: `/news/123/comments`, `/news/123/text`.
 Version examples: `1365017905` (unix timestamp), `45765` (your own integer increment), `2013-04-25 15:48:19` (some datestamp, high to low), `515c8559499c215c3d000000` (MongoId)
@@ -135,7 +136,8 @@ Tracking & Persistence
 ----------------------
 
 By default, the tracking server is configured to persist information about resources (and their versions) to the filesystem.
-Additional methods of persistence can be added later ([MongoDB](http://mongodb.org/) is a good next choice).
+A bounded memory cache accelerates reads. Set the persister type to `none` for
+memory-only operation; evicted records are then lost.
 
 This means that the server can be restarted at any time without losing its previous state.
 Naturally, while it's down, your application server cannot inform it about changes to resources (publishing new updates).
@@ -149,8 +151,8 @@ Installation
 ### Container (recommended for self-hosting)
 
 Images are published to `ghcr.io/spantaleev/recency-tracker` for Linux amd64 and
-arm64. Use an exact release tag such as `2.0.0` for deliberate upgrades. The `2.0`,
-`2`, and `latest` tags follow stable releases; `edge` follows the development branch.
+arm64. Use an exact release tag such as `3.0.0` for deliberate upgrades. The `3.0`,
+`3`, and `latest` tags follow stable releases; `edge` follows the development branch.
 
 Copy `config/container.json.dist` to a local `config.json` and **change the publishing
 secret**, or supply it through `RECENCY_TRACKER_PUBLISHER_SECRET`. This configuration
@@ -163,7 +165,7 @@ bound to localhost for a reverse proxy:
 ```yaml
 services:
   recency-tracker:
-    image: ghcr.io/spantaleev/recency-tracker:2.0.0
+    image: ghcr.io/spantaleev/recency-tracker:3.0.0
     restart: unless-stopped
     read_only: true
     ports:
@@ -176,8 +178,9 @@ services:
 Create the host `data` directory before starting the service, and make it writable
 by UID/GID `1000:1000` (the image's default `node` user). An explicit Compose `user`
 can select a different UID/GID; that user must be able to read the configuration
-and write the storage directory **and any existing resource files**. The image runs
-directly as Node.js and works with a read-only root filesystem.
+and read existing records and write the storage directory. Replacement preserves
+existing file permissions. The image runs a static Rust executable with a read-only
+root filesystem.
 
 Applications on the same Compose network publish to
 `http://recency-tracker:9998/publish`. Keep that port private to applications that
@@ -203,17 +206,19 @@ The smoke check uses temporary storage and containers. It verifies authenticated
 publishing, WebSocket delivery, persistence after replacing the container, read-only
 mounts, and an arbitrary runtime UID. Node.js 22 or newer and Docker are required.
 
-### Running directly with Node.js
+### Running from source
 
- * Make sure you have [Node.js](https://nodejs.org/) 22 or newer installed
- * Clone this repository
- * Run `npm install` to install the required dependencies
- * Copy `config/config.json.dist` to `config/config.json`
- * Customize the configuration in `config/config.json` - be sure to **change the publishing secret**
- * Run `npm start` to start the server
+Install the Rust toolchain pinned in `rust/rust-toolchain.toml`, then:
 
-In practice, you may wish to run the server process under a process manager, such as [supervisord](http://supervisord.org/).
-For a sample configuration, see `resources/supervisord-config.conf`.
+```sh
+cargo build --manifest-path rust/Cargo.toml --locked --release
+cp config/config.json.dist config/config.json
+# Edit config/config.json, especially the publishing secret and storage path.
+./rust/target/release/recency-tracker
+```
+
+The configured storage directory must already exist. A process manager can run the
+binary directly; see `resources/supervisord-config.conf` for an example.
 
 Set `RECENCY_TRACKER_CONFIG` to load a configuration file from a different path.
 Otherwise, the server reads `config/config.json` from its working directory.
@@ -224,26 +229,47 @@ file without changing it. An explicitly empty environment secret prevents startu
 Testing
 -------
 
-Run `npm test` after installing dependencies. Tests use Node.js's built-in test runner
-and temporary local HTTP/WebSocket servers; no running tracker or configuration file is required.
-They cover publishing, subscriptions, browser reconnect behavior, connection cleanup,
-and catching up from filesystem storage.
+The Rust unit and failure-path tests run with:
+
+```sh
+cargo test --manifest-path rust/Cargo.toml --locked
+npm ci --engine-strict
+npm test
+```
+
+Node.js is used only for browser/consumer tests and benchmarks. The generic contract
+suite compares Rust with a pinned v2 reference and exercises the unchanged PHP
+publisher, persistence, protocol errors, reconnect and heartbeat behavior. See
+[rust/README.md](rust/README.md) for setup and additional checks. CI builds and
+smoke-tests Linux amd64 and arm64 containers on native runners.
 
 ### Publishing a release
 
-For Node v2 releases, `package.json` is the version source. Update its version and the matching root
-versions in `package-lock.json` together (for example, with
-`npm version 2.0.1 --no-git-tag-version`), then commit and push the change.
-Push the matching `v2.0.1` Git tag to publish a release image. CI refuses release
-tags that do not match both package files.
+`rust/Cargo.toml` is the version source; update its package version and the matching
+self-package entry in `rust/Cargo.lock` manually and commit them together. A matching
+stable `v3.X.Y` Git tag runs native validation before publishing the exact tested
+images, their combined manifest, and the version, minor, `3`, and `latest` tags.
+Pushes to `master` publish `edge` after the same checks pass. No version or tag is
+selected automatically. Manual release-workflow runs validate without publishing.
 
-On pull requests, CI runs the Node.js test matrix and builds and smoke-tests both
-container architectures on native runners. Pushes to `master` publish `edge` only
-after those checks pass. Release tags run the same checks before publishing the
-exact version, minor, major, and `latest` image tags. The workflow uses the
-repository's `GITHUB_TOKEN`; no registry password is required. GitHub releases can
-then be published with migration notes after verifying the image is available.
+### Upgrading from 2.x to 3.x
 
+The server runtime changes from Node.js to Rust. The v2 browser asset and PHP
+publisher work unchanged, as do ordinary configuration files, ports and persisted
+JSON records. No storage conversion is needed. Keep the exact v2 image available
+for rollback and test with a copy of your state before upgrading. Stop the old
+writer before starting the replacement; do not share writable storage between two
+servers. The Rust server takes an advisory lock which the old server does not honor.
+
+New configurable connection, subscription and outbound queue limits bound retained
+work. The default limit is 1,024 subscriptions per browser connection; increase it
+before upgrading if your pages exceed that count. Exceeding a persistent subscription
+limit causes repeated reconnects until the workload or limit changes. Ambiguous
+forms, malformed persisted data and storage failures now have stricter behavior;
+review the [compatibility boundary and operational limits](rust/README.md).
+Filesystem publications are atomically replaced and synced before success is
+acknowledged. A failed response can still follow a completed rename, so failure
+does not prove that the stored version stayed unchanged.
 
 Upgrading from 1.x to 2.x
 ------------------------
@@ -256,7 +282,6 @@ The subscription transport is incompatible with 1.x: **deploy the new server and
 new browser client together**. Existing SockJS clients cannot connect to the v2
 server, and the v2 browser client cannot connect to a v1 SockJS server.
 
- * Use Node.js 22 or newer for the server.
  * Replace any copied `recency-tracker.js` with the v2 file and update its asset
    version or URL so browsers fetch it. Open pages running the old client must reload.
  * Remove the SockJS script and any dependency on it in your script loader.
