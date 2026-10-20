@@ -16,6 +16,8 @@ tungstenite = { version = "=0.29.0", default-features = false }
 ryu-js = "1"
 
 tempfile = "=3.27.0"
+hyper = { version = "=1.12.0", features = ["server", "http1"] }
+hyper-util = { version = "=0.1.21", features = ["tokio", "service"] }
 
 [target.'cfg(unix)'.dependencies]
 rustix = { version = "1", features = ["fs"] }

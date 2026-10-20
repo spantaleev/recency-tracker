@@ -474,9 +474,11 @@ dependencies = [
 name = "recency-tracker"
 version = "3.0.0-dev"
 dependencies = [
- "rustix",
  "axum",
  "form_urlencoded",
+ "hyper",
+ "hyper-util",
+ "rustix",
  "ryu-js",
  "serde",
  "serde_json",

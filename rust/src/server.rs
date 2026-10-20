@@ -16,11 +16,28 @@ use axum::{
     response::{IntoResponse, Response},
     routing::{get, post},
 };
+use hyper_util::{
+    rt::{TokioIo, TokioTimer},
+    service::TowerToHyperService,
+};
 use serde_json::json;
 use sha2::{Digest, Sha256};
-use std::{collections::HashMap, io, net::SocketAddr, time::Duration};
+use std::{
+    collections::HashMap,
+    io,
+    net::SocketAddr,
+    pin::Pin,
+    sync::Arc,
+    task::{Context, Poll},
+    time::Duration,
+};
 use subtle::ConstantTimeEq;
-use tokio::{net::TcpListener, sync::watch, task::JoinHandle};
+use tokio::{
+    io::{AsyncRead, AsyncWrite, ReadBuf},
+    net::{TcpListener, TcpStream},
+    sync::{OwnedSemaphorePermit, Semaphore, watch},
+    task::{JoinHandle, JoinSet},
+};
 
 const MAX_MESSAGE: usize = 64 * 1024;
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(10);
@@ -45,10 +62,15 @@ impl Server {
     pub async fn start(config: Config) -> io::Result<Self> {
         let storage = Storage::open(config.storage)?;
         // Bind both listeners before spawning any work, so partial startup cleans up.
-        let publisher = TcpListener::bind((config.publisher.ip.as_str(), config.publisher.port)).await?;
-        let subscriber = TcpListener::bind((config.subscriber.ip.as_str(), config.subscriber.port)).await?;
+        let publisher =
+            TcpListener::bind((config.publisher.ip.as_str(), config.publisher.port)).await?;
+        let subscriber =
+            TcpListener::bind((config.subscriber.ip.as_str(), config.subscriber.port)).await?;
         let publisher_addr = publisher.local_addr()?;
         let subscriber_addr = subscriber.local_addr()?;
+        // Leave bounded handshake headroom so the tracker can return HTTP 503
+        // at the WebSocket limit instead of resetting every excess upgrade.
+        let connections = config.limits.connections + 32;
         let (tracker, actor) = Tracker::start(storage, config.cache_items, config.limits);
         let (stop, stop_rx) = watch::channel(false);
         let app = App {
@@ -59,13 +81,18 @@ impl Server {
         };
         let publisher_app = Router::new()
             .route("/ping", get(|| async { "publisher server up" }))
+            .route("/ping/", get(|| async { "publisher server up" }))
             .route("/publish", post(publish))
+            .route("/publish/", post(publish))
             .layer(DefaultBodyLimit::max(100 * 1024))
             .layer(middleware::from_fn(deadline))
             .with_state(app.clone());
-        let publisher_app = Router::new().fallback_service(publisher_app).layer(middleware::from_fn(canonical_paths));
+        let publisher_app = Router::new()
+            .fallback_service(publisher_app)
+            .layer(middleware::from_fn(canonical_paths));
         let subscriber_app = Router::new()
             .route("/ping", get(|| async { "subscriber server up" }))
+            .route("/ping/", get(|| async { "subscriber server up" }))
             .route("/subscribe", get(upgrade))
             .route(
                 "/recency-tracker.js",
@@ -88,17 +115,13 @@ impl Server {
             })
             .layer(middleware::from_fn(deadline))
             .with_state(app);
-        let subscriber_app = Router::new().fallback_service(subscriber_app).layer(middleware::from_fn(canonical_paths));
-        let mut pub_stop = stop_rx.clone();
-        let mut sub_stop = stop_rx;
+        let subscriber_app = Router::new()
+            .fallback_service(subscriber_app)
+            .layer(middleware::from_fn(canonical_paths));
         let http = tokio::spawn(async move {
             let (a, b) = tokio::join!(
-                axum::serve(publisher, publisher_app).with_graceful_shutdown(async move {
-                    let _ = pub_stop.changed().await;
-                }),
-                axum::serve(subscriber, subscriber_app).with_graceful_shutdown(async move {
-                    let _ = sub_stop.changed().await;
-                })
+                serve(publisher, publisher_app, stop_rx.clone(), connections),
+                serve(subscriber, subscriber_app, stop_rx, connections)
             );
             a?;
             b?;
@@ -121,6 +144,75 @@ impl Server {
         self.actor.await.map_err(io::Error::other)?;
         result
     }
+}
+// The permit travels with the I/O through Hyper's WebSocket upgrade, so an
+// upgraded socket stays charged against the same pre-header admission budget.
+struct AdmittedStream {
+    stream: TcpStream,
+    _permit: OwnedSemaphorePermit,
+}
+impl AsyncRead for AdmittedStream {
+    fn poll_read(
+        self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+        buf: &mut ReadBuf<'_>,
+    ) -> Poll<io::Result<()>> {
+        Pin::new(&mut self.get_mut().stream).poll_read(cx, buf)
+    }
+}
+impl AsyncWrite for AdmittedStream {
+    fn poll_write(
+        self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+        buf: &[u8],
+    ) -> Poll<io::Result<usize>> {
+        Pin::new(&mut self.get_mut().stream).poll_write(cx, buf)
+    }
+    fn poll_flush(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
+        Pin::new(&mut self.get_mut().stream).poll_flush(cx)
+    }
+    fn poll_shutdown(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
+        Pin::new(&mut self.get_mut().stream).poll_shutdown(cx)
+    }
+}
+async fn serve(
+    listener: TcpListener,
+    app: Router,
+    mut stop: watch::Receiver<bool>,
+    limit: usize,
+) -> io::Result<()> {
+    let budget = Arc::new(Semaphore::new(limit));
+    let mut tasks = JoinSet::new();
+    loop {
+        tokio::select! {
+            _=stop.changed()=>break,
+            Some(_)=tasks.join_next(), if !tasks.is_empty()=>{},
+            accepted=listener.accept()=>{
+                let (stream, _) = accepted?;
+                let Ok(permit) = budget.clone().try_acquire_owned() else {continue};
+                let app = app.clone();
+                let mut stop = stop.clone();
+                tasks.spawn(async move {
+                    let mut builder = hyper::server::conn::http1::Builder::new();
+                    builder.timer(TokioTimer::new()).header_read_timeout(REQUEST_TIMEOUT);
+                    let connection = builder.serve_connection(
+                        TokioIo::new(AdmittedStream { stream, _permit: permit }),
+                        TowerToHyperService::new(app)
+                    ).with_upgrades();
+                    tokio::pin!(connection);
+                    tokio::select! {
+                        _=&mut connection=>{},
+                        _=stop.changed()=>{
+                            connection.as_mut().graceful_shutdown();
+                            let _ = connection.await;
+                        }
+                    }
+                });
+            }
+        }
+    }
+    while tasks.join_next().await.is_some() {}
+    Ok(())
 }
 // Express accepted case-insensitive dynamic HTTP routes and one trailing slash.
 // Normalize only these known routes before the inner router dispatches them.
@@ -311,9 +403,21 @@ async fn socket_loop(mut socket: WebSocket, mut app: App, mut connection: Connec
                 };
                 let value=match serde_json::from_str(&text){Ok(value)=>value,Err(_)=>{close(&mut socket,1007,"Invalid JSON").await;break;}};
                 let Some(command)=SubscriptionCommand::parse(value) else{continue};
-                let result=match command {
-                    SubscriptionCommand::Subscribe(resource,version)=>app.tracker.subscribe(connection.id,resource,version).await,
-                    SubscriptionCommand::Unsubscribe(resource)=>app.tracker.unsubscribe(connection.id,resource).await,
+                // Keep shutdown/cancellation selectable during filesystem work. A
+                // stalled actor must not suspend this socket's control loop forever.
+                let operation = async {
+                    match command {
+                        SubscriptionCommand::Subscribe(resource,version)=>app.tracker.subscribe(connection.id,resource,version).await,
+                        SubscriptionCommand::Unsubscribe(resource)=>app.tracker.unsubscribe(connection.id,resource).await,
+                    }
+                };
+                let result = tokio::select! {
+                    _=app.stop.changed()=>{close(&mut socket,1001,"Server shutting down").await;break;}
+                    _=connection.cancelled.changed()=>{close(&mut socket,1013,"Reconnect and resubscribe").await;break;}
+                    result=tokio::time::timeout(REQUEST_TIMEOUT,operation)=>match result {
+                        Ok(result)=>result,
+                        Err(_)=>{close(&mut socket,1011,"Subscription timeout").await;break;}
+                    }
                 };
                 if let Err(e)=result {
                     let code=if matches!(e,tracker::Error::Storage(_)){1011}else{1013};
@@ -324,4 +428,80 @@ async fn socket_loop(mut socket: WebSocket, mut app: App, mut connection: Connec
     }
     // Connection drop sends cleanup. Closed update receivers are swept even if the
     // command queue was full, so disconnects cannot permanently retain subscriptions.
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+    #[tokio::test]
+    async fn incomplete_headers_expire_and_connections_are_bounded_before_upgrade() {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let (stop, stopped) = watch::channel(false);
+        let task = tokio::spawn(serve(
+            listener,
+            Router::new().route("/ping", get(|| async { "up" })),
+            stopped,
+            1,
+        ));
+        let mut first = TcpStream::connect(address).await.unwrap();
+        first
+            .write_all(b"GET /ping HTTP/1.1\r\nHost:")
+            .await
+            .unwrap();
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        let mut excess = TcpStream::connect(address).await.unwrap();
+        let mut byte = [0];
+        let rejected = tokio::time::timeout(Duration::from_secs(1), excess.read(&mut byte))
+            .await
+            .unwrap();
+        assert!(matches!(rejected, Ok(0) | Err(_)));
+        let mut response = Vec::new();
+        tokio::time::timeout(
+            REQUEST_TIMEOUT + Duration::from_secs(2),
+            first.read_to_end(&mut response),
+        )
+        .await
+        .unwrap()
+        .unwrap();
+        let mut recovered = TcpStream::connect(address).await.unwrap();
+        recovered
+            .write_all(b"GET /ping HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n")
+            .await
+            .unwrap();
+        let mut response = String::new();
+        recovered.read_to_string(&mut response).await.unwrap();
+        assert!(response.starts_with("HTTP/1.1 200"), "{response}");
+        stop.send(true).unwrap();
+        task.await.unwrap().unwrap();
+    }
+
+    #[tokio::test]
+    async fn upgraded_io_retains_its_admission_permit() {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let app = Router::new().route(
+            "/subscribe",
+            get(|ws: WebSocketUpgrade| async {
+                ws.on_upgrade(|mut socket| async move { while socket.recv().await.is_some() {} })
+            }),
+        );
+        let (stop, stopped) = watch::channel(false);
+        let task = tokio::spawn(serve(listener, app, stopped, 1));
+        let mut socket = TcpStream::connect(address).await.unwrap();
+        socket.write_all(b"GET /subscribe HTTP/1.1\r\nHost: localhost\r\nConnection: Upgrade\r\nUpgrade: websocket\r\nSec-WebSocket-Version: 13\r\nSec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\n\r\n").await.unwrap();
+        let mut response = [0; 1024];
+        let read = socket.read(&mut response).await.unwrap();
+        assert!(response[..read].starts_with(b"HTTP/1.1 101"));
+        let mut excess = TcpStream::connect(address).await.unwrap();
+        let rejected = tokio::time::timeout(Duration::from_secs(1), excess.read(&mut response))
+            .await
+            .unwrap();
+        assert!(matches!(rejected, Ok(0) | Err(_)));
+        drop(socket);
+        stop.send(true).unwrap();
+        task.await.unwrap().unwrap();
+    }
 }
