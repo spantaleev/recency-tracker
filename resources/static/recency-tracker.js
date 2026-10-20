@@ -1,4 +1,4 @@
-/** recency-tracker 1.0 - BSD licensed - https://github.com/spantaleev/recency-tracker **/
+/** recency-tracker 2.0 - BSD licensed - https://github.com/spantaleev/recency-tracker **/
 
 (function () {
 	var Subscription = function (resource, version, changeHandlers) {
@@ -13,149 +13,132 @@
 
 	Subscription.prototype.update = function (version, data) {
 		this.version = version;
-
 		for (var idx in this.changeHandlers) {
 			this.changeHandlers[idx](version, data);
 		}
 	};
 
-
-	var STATE_DISCONNECTED = 0;
-	var STATE_CONNECTING = 1;
-	var STATE_CONNECTED = 2;
-
-
 	window.RecencyTracker = function (serverUrl) {
-		this._serverUrl = serverUrl;
+		var url = new URL(serverUrl, window.location.href);
+		if (url.protocol === 'http:') {
+			url.protocol = 'ws:';
+		} else if (url.protocol === 'https:') {
+			url.protocol = 'wss:';
+		}
+		if ((url.protocol !== 'ws:' && url.protocol !== 'wss:') || url.hash) {
+			throw new Error('Expected a WebSocket or HTTP URL without a fragment');
+		}
+
+		this._serverUrl = url.href;
 		this._sock = null;
-		this._sockMessagesQueue = [];
-		this._subscriptions = {};
+		this._reconnectTimer = null;
+		this._subscriptions = Object.create(null);
 		this._subscriptionsCount = 0;
-		this._state = STATE_DISCONNECTED;
 	};
 
 	RecencyTracker.prototype.subscribe = function (resource, version, onChange) {
 		version = ('' + version);
-
 		if (resource in this._subscriptions) {
-			var subscription = this._subscriptions[resource];
-			subscription.addChangeHandler(onChange);
-		} else {
-			var subscription = new Subscription(resource, version, [onChange]);
-			this._subscriptions[resource] = subscription;
-			this._subscriptionsCount += 1;
-
-			//Announce immediately only if connected.
-			//Otherwise wait for the initial connection, which will announce all subscriptions.
-			if (this._state === STATE_CONNECTED) {
-				this._announce(subscription);
-			} else {
-				this._sockInit();
-			}
-		}
-	};
-
-	RecencyTracker.prototype.unsubscribe = function (resource) {
-		if (! (resource in this._subscriptions)) {
+			this._subscriptions[resource].addChangeHandler(onChange);
 			return;
 		}
 
-		var subscription = this._subscriptions[resource];
+		var subscription = new Subscription(resource, version, [onChange]);
+		this._subscriptions[resource] = subscription;
+		this._subscriptionsCount += 1;
 
-		this._sockSend({
-			"type": "unsubscribe",
-			"resource": resource
-		});
-
-		delete this._subscriptions[resource];
-		this._subscriptionsCount -= 1;
-
-		if (this._subscriptionsCount === 0) {
-			//Don't keep an open connection for no subscriptions.
-			this._disconnect();
-		}
-	};
-
-	RecencyTracker.prototype._sockInit = function () {
-		if (this._state !== STATE_DISCONNECTED) {
-			return;
-		}
-
-		this._state = STATE_CONNECTING;
-
-		var self = this;
-
-		var init = function () {
-			self._sock = new SockJS(self._serverUrl);
-
-			self._sock.onopen = function() {
-				self._state = STATE_CONNECTED;
-
-				for (var resource in self._subscriptions) {
-					self._announce(self._subscriptions[resource]);
-				}
-
-				for (var idx in self._sockMessagesQueue) {
-					self._sock.send(self._sockMessagesQueue[idx]);
-				}
-				self._sockMessagesQueue = [];
-			};
-
-			self._sock.onclose = function() {
-				self._state = STATE_CONNECTING;
-
-				window.setTimeout(function () {
-					init();
-				}, 5000);
-			};
-
-			self._sock.onmessage = function (e) {
-				var message = JSON.parse(e.data);
-				self._onMessage(message);
-			};
-		};
-
-		init();
-	};
-
-	RecencyTracker.prototype._sockSend = function (message) {
-		var message = JSON.stringify(message);
-
-		if (this._state === STATE_CONNECTED) {
-			this._sock.send(message);
+		if (this._sock !== null && this._sock.readyState === WebSocket.OPEN) {
+			this._announce(subscription);
 		} else {
-			this._sockMessagesQueue.push(message);
 			this._sockInit();
 		}
 	};
 
-	RecencyTracker.prototype._onMessage = function (message) {
-		if (message.type === "update") {
-			var resource = message.resource,
-				version = message.version,
-				data = message.data;
+	RecencyTracker.prototype.unsubscribe = function (resource) {
+		if (!(resource in this._subscriptions)) {
+			return;
+		}
 
-			if (resource in this._subscriptions) {
-				this._subscriptions[resource].update(version, data);
+		delete this._subscriptions[resource];
+		this._subscriptionsCount -= 1;
+		if (this._subscriptionsCount === 0) {
+			this._disconnect();
+		} else if (this._sock !== null && this._sock.readyState === WebSocket.OPEN) {
+			this._sock.send(JSON.stringify({ type: 'unsubscribe', resource: resource }));
+		}
+	};
+
+	RecencyTracker.prototype._sockInit = function () {
+		if (this._subscriptionsCount === 0 || this._sock !== null || this._reconnectTimer !== null) {
+			return;
+		}
+
+		var self = this;
+		var sock = new WebSocket(this._serverUrl);
+		this._sock = sock;
+
+		sock.onopen = function () {
+			if (self._sock !== sock) {
+				return;
 			}
-		} else {
-			throw new Error("Unknown message type: " + JSON.stringify(message));
+			for (var resource in self._subscriptions) {
+				self._announce(self._subscriptions[resource]);
+			}
+		};
+
+		sock.onclose = function () {
+			if (self._sock !== sock) {
+				return;
+			}
+			self._sock = null;
+			if (self._subscriptionsCount > 0) {
+				self._reconnectTimer = window.setTimeout(function () {
+					self._reconnectTimer = null;
+					self._sockInit();
+				}, 5000);
+			}
+		};
+
+		sock.onmessage = function (event) {
+			if (self._sock !== sock) {
+				return;
+			}
+			var message;
+			try {
+				message = JSON.parse(event.data);
+			} catch (error) {
+				return;
+			}
+			self._onMessage(message);
+		};
+	};
+
+	RecencyTracker.prototype._onMessage = function (message) {
+		if (message !== null && typeof message === 'object' && message.type === 'update' &&
+			typeof message.version === 'string' && typeof message.resource === 'string' &&
+			message.resource in this._subscriptions) {
+			this._subscriptions[message.resource].update(message.version, message.data);
 		}
 	};
 
 	RecencyTracker.prototype._announce = function (subscription) {
-		this._sockSend({
-			"type": "subscribe",
-			"resource": subscription.resource,
-			"version": subscription.version
-		});
+		this._sock.send(JSON.stringify({
+			type: 'subscribe',
+			resource: subscription.resource,
+			version: subscription.version
+		}));
 	};
 
 	RecencyTracker.prototype._disconnect = function () {
-		if (this._sock !== null) {
-			this._sock.onclose = function () {};
-			this._sock.close();
-			this._state = STATE_DISCONNECTED;
+		if (this._reconnectTimer !== null) {
+			window.clearTimeout(this._reconnectTimer);
+			this._reconnectTimer = null;
+		}
+		var sock = this._sock;
+		this._sock = null;
+		if (sock !== null) {
+			sock.onopen = sock.onmessage = sock.onclose = null;
+			sock.close();
 		}
 	};
 })();

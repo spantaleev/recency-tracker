@@ -28,7 +28,7 @@ Actions and actors
 **Publishing** is done with a simple POST request from your application server. Check `examples/_publisher.html` to see how to do it yourself.
 There is a [PHP library](https://github.com/spantaleev/recency-tracker-publisher-php) to make it easier in PHP applications.
 
-**Subscribing** happens in the client's browser with the help of the included `recency-tracker.js` library (and [SockJS](http://sockjs.org/) in the background).
+**Subscribing** happens in the client's browser with the help of the included `recency-tracker.js` library and the browser's native WebSocket support. No additional browser library is required.
 
 
 High-level view / example
@@ -48,7 +48,6 @@ What you do with the notification message in the browser is up to you (updating 
 
 ### Subscribing
 
-	<script type="text/javascript" src="http://cdn.sockjs.org/sockjs-0.3.min.js"></script>
 	<script type="text/javascript" src="http://subscriber-host:port/recency-tracker.js"></script>
 
     <div id="js-comments" data-version="1">.. some comments here ..</div>
@@ -73,6 +72,14 @@ Flow:
  * the client subscribes for notifications about resource `/news/38/comments` (comments for news item 38)
  * the client receives a notification when version 2 or higher becomes available
  * the client does whatever's needed to update the comments list (an AJAX request to fetch a new list in this case)
+
+The constructor accepts `ws://`, `wss://`, `http://`, `https://`, or relative URLs.
+HTTP URLs are converted to their WebSocket equivalents; use HTTPS/WSS when the
+page is served over HTTPS. Relative URLs resolve against the page URL.
+
+The client reconnects after five seconds when a connection closes and subscribes
+again using the last received version of each resource. Removing the last
+subscription closes the connection and cancels any pending reconnect.
 
 
 ### Publishing (PHP)
@@ -135,7 +142,7 @@ The only way to get around that limitation is to have the application server kno
 Installation
 ------------
 
- * Make sure you have [nodejs](http://nodejs.org/) installed
+ * Make sure you have [Node.js](https://nodejs.org/) 22 or newer installed
  * Clone this repository
  * Run `npm install` to install the required dependencies
  * Copy `config/config.json.dist` to `config/config.json`
@@ -150,4 +157,61 @@ Testing
 -------
 
 Run `npm test` after installing dependencies. Tests use Node.js's built-in test runner
-and temporary local HTTP servers; no running tracker or configuration file is required.
+and temporary local HTTP/WebSocket servers; no running tracker or configuration file is required.
+They cover publishing, subscriptions, browser reconnect behavior, connection cleanup,
+and catching up from filesystem storage.
+
+
+Upgrading from 1.x to 2.x
+------------------------
+
+Version 2 replaces SockJS with native WebSockets. The browser API
+(`subscribe(resource, version, callback)` and `unsubscribe(resource)`), publishing
+endpoint and secret, configuration format, and persisted resource files are unchanged.
+
+The subscription transport is incompatible with 1.x: **deploy the new server and
+new browser client together**. Existing SockJS clients cannot connect to the v2
+server, and the v2 browser client cannot connect to a v1 SockJS server.
+
+ * Use Node.js 22 or newer for the server.
+ * Replace any copied `recency-tracker.js` with the v2 file and update its asset
+   version or URL so browsers fetch it. Open pages running the old client must reload.
+ * Remove the SockJS script and any dependency on it in your script loader.
+ * Existing subscription URLs such as `https://tracker.example/subscribe` can stay:
+   the new client converts them to `wss://` automatically.
+ * Configure reverse proxies to forward WebSocket upgrades at `/subscribe`,
+   including the `Upgrade` and `Connection` headers. Allow an idle timeout longer
+   than the server's 30-second ping interval.
+   For nginx, explicitly setting `proxy_http_version 1.1` also supports versions
+   before 1.29.7, whose upstream default was HTTP/1.0. See
+   [nginx's WebSocket documentation](https://nginx.org/en/docs/http/websocket.html).
+ * HTTP polling and streaming fallbacks are removed. Browsers and proxies must
+   support WebSockets. Each client-to-server message is limited to 64 KiB.
+
+Pinned deployments keep using their existing code until the source revision or
+image is deliberately upgraded. For an upgrade, keep the matching v1 server image
+and browser asset available so both sides can be rolled back together. Resource
+storage requires no migration.
+
+### Subscription protocol
+
+Connect a WebSocket directly to `/subscribe`. Each text frame contains a JSON message,
+without SockJS framing:
+
+```json
+{"type":"subscribe","resource":"/news/38/comments","version":"1"}
+{"type":"unsubscribe","resource":"/news/38/comments"}
+```
+
+Updates arrive as:
+
+```json
+{"type":"update","resource":"/news/38/comments","version":"2","data":{}}
+```
+
+Resource names must start with `/`. Subscription versions may be strings or finite
+numbers; update versions are strings. Invalid subscription commands are ignored.
+Malformed JSON closes the connection with code 1007, binary messages with 1003,
+and oversized messages with 1009. The server pings connections every 30 seconds
+and drops those that have not answered the previous ping; browsers answer pings
+automatically.
