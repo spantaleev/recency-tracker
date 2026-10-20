@@ -28,9 +28,9 @@ async function fixture(t, {limits, filesystem=true} = {}) {
  const configFile=path.join(directory,'config.json');await fs.writeFile(configFile,JSON.stringify(config));
  let child; const sockets=[];
  const pub=`http://127.0.0.1:${config.publisher.port}`,sub=`http://127.0.0.1:${config.subscriber.port}`;
- async function start() {
-  const command=implementation==='node'?process.execPath:path.join(root,'rust/target/debug/recency-tracker');
-  child=spawn(command,implementation==='node'?['bin/server']:[],{cwd:root,env:{...process.env,RECENCY_TRACKER_CONFIG:configFile,RECENCY_TRACKER_PUBLISHER_SECRET:secret},stdio:['ignore','ignore','pipe']});
+ async function start(selected=implementation) {
+  const command=selected==='node'?process.execPath:path.join(root,'rust/target/debug/recency-tracker');
+  child=spawn(command,selected==='node'?['bin/server']:[],{cwd:root,env:{...process.env,RECENCY_TRACKER_CONFIG:configFile,RECENCY_TRACKER_PUBLISHER_SECRET:secret},stdio:['ignore','ignore','pipe']});
   let logs='';child.stderr.on('data',d=>{logs=(logs+d).slice(-4000);});
   await until(async()=>{assert.equal(child.exitCode,null,logs);try{return (await fetch(pub+'/ping',timeout())).ok;}catch{return false;}});
  }
@@ -125,4 +125,17 @@ test('connection and subscription limits close clients explicitly', {skip:implem
 
 test('invalid UTF-8 text closes with code 1007',async t=>{
  const f=await fixture(t),c=await f.connect();const closed=once(c.socket,'close',timeout());c.socket.send(Buffer.from([0xff]),{binary:false});assert.equal((await closed)[0],1007);
+});
+
+test('real heartbeat drops unresponsive sockets and keeps responsive sockets', {skip:process.env.RECENCY_TEST_HEARTBEAT!=='1'},async t=>{
+ const f=await fixture(t,{filesystem:false}),good=await f.connect(),bad=await f.connect({autoPong:false});let pings=0;good.socket.on('ping',()=>pings++);
+ await once(bad.socket,'close',{signal:AbortSignal.timeout(66000)});await until(()=>pings>=2);assert.equal(good.socket.readyState,WebSocket.OPEN);
+ good.send({type:'subscribe',resource:'/example/heartbeat',version:0});await f.publish('/example/heartbeat','1');await until(()=>good.messages.length===1);
+});
+
+
+test("Node and Rust read each other's persisted records without conversion",async t=>{
+ const f=await fixture(t);await f.stop();await f.start('node');await f.publish('/example/migration','1',{before:true});await f.stop();
+ await f.start('rust');let c=await f.connect();c.send({type:'subscribe',resource:'/example/migration',version:0});await until(()=>c.messages.length===1);assert.deepEqual(c.messages[0].data,{before:true});
+ await f.publish('/example/migration','2',{after:true});await f.stop();await f.start('node');c=await f.connect();c.send({type:'subscribe',resource:'/example/migration',version:0});await until(()=>c.messages.length===1);assert.deepEqual(c.messages[0].data,{after:true});
 });

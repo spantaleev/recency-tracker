@@ -1,0 +1,12 @@
+**
+!rust/
+!rust/Cargo.toml
+!rust/Cargo.lock
+!rust/src/
+!rust/src/**
+!rust/container/
+!rust/container/**
+!resources/
+!resources/static/
+!resources/static/**
+!LICENSE.txt
