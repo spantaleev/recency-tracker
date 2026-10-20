@@ -35,6 +35,16 @@ const validFields = { secret: 'test-secret', resource: '/test/resource', version
 
 const invalidRequests = [
 	{
+		name: 'empty requests',
+		error: 'bad request'
+	},
+	{
+		name: 'unparsed request bodies',
+		body: JSON.stringify(validFields),
+		headers: { 'content-type': 'application/json' },
+		error: 'bad request'
+	},
+	{
 		name: 'requests missing required fields',
 		body: new URLSearchParams({ secret: 'test-secret', resource: '/test/resource' }),
 		error: 'bad request'
