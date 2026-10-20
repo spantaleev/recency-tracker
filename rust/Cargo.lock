@@ -483,6 +483,7 @@ dependencies = [
  "subtle",
  "tempfile",
  "tokio",
+ "tungstenite",
 ]
 
 [[package]]

@@ -181,10 +181,10 @@ impl Cache {
             return;
         }
         if !self.records.contains_key(&resource) {
-            if self.records.len() == self.capacity {
-                if let Some(old) = self.order.pop_front() {
-                    self.records.remove(&old);
-                }
+            if self.records.len() == self.capacity
+                && let Some(old) = self.order.pop_front()
+            {
+                self.records.remove(&old);
             }
             self.order.push_back(resource.clone());
         }
@@ -458,5 +458,26 @@ mod tests {
         );
         t.shutdown().await;
         task.await.unwrap();
+    }
+    #[tokio::test]
+    async fn shutdown_drains_accepted_writes_even_when_callers_disconnect() {
+        let dir = tempfile::tempdir().unwrap();
+        let storage = Storage::open(Some(dir.path().to_owned())).unwrap();
+        let (t, task) = Tracker::start(storage, 2, Limits::default());
+        let r = resource("ordered");
+        for n in 1..=20 {
+            let (reply, response) = oneshot::channel();
+            drop(response);
+            t.tx.send(Command::Publish(r.clone(), record(n), reply))
+                .await
+                .unwrap();
+        }
+        t.shutdown().await;
+        task.await.unwrap();
+        let bytes = std::fs::read(Storage::filename(dir.path(), &r)).unwrap();
+        assert_eq!(
+            serde_json::from_slice::<Record>(&bytes).unwrap().version.0,
+            "20"
+        );
     }
 }
