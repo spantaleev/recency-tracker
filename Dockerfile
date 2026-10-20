@@ -1,4 +1,4 @@
-FROM docker.io/node:24.16.0-alpine3.24@sha256:21f403ab171f2dc89bad4dd69d7721bfd15f084ccb46cdd225f31f2bc59b5c9a
+FROM docker.io/node:24.22.0-alpine3.24@sha256:44fce696f38ba8c987c4db89954051000bbd05ffd8d8659ba15ed4a8602e937f
 
 LABEL org.opencontainers.image.source="https://github.com/spantaleev/recency-tracker" \
       org.opencontainers.image.licenses="BSD-3-Clause"
