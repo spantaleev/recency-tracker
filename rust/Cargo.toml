@@ -1,0 +1,29 @@
+[package]
+name = "recency-tracker"
+version = "3.0.0"
+edition = "2024"
+publish = false
+
+[dependencies]
+axum = { version = "=0.8.9", default-features = false, features = ["http1", "tokio", "ws", "json"] }
+tokio = { version = "=1.53.3", features = ["rt", "macros", "net", "signal", "time", "sync", "fs", "io-util"] }
+serde = { version = "=1.0.229", features = ["derive"] }
+serde_json = "1"
+sha2 = "=0.11.1"
+form_urlencoded = "=1.2.2"
+subtle = "=2.6.1"
+tungstenite = { version = "=0.29.0", default-features = false }
+ryu-js = "1"
+
+tempfile = "=3.27.0"
+hyper = { version = "=1.12.0", features = ["server", "http1"] }
+hyper-util = { version = "=0.1.21", features = ["tokio", "service"] }
+
+[target.'cfg(unix)'.dependencies]
+rustix = { version = "1", features = ["fs"] }
+
+[profile.release]
+strip = true
+lto = "thin"
+codegen-units = 1
+panic = "abort"

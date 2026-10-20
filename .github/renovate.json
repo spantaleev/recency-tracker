@@ -16,7 +16,7 @@
 			"rangeStrategy": "pin"
 		},
 		{
-			"description": "The minimum supported Node.js version is maintained alongside the CI runtime matrix.",
+			"description": "The minimum Node.js version for test tooling is maintained manually.",
 			"matchManagers": ["npm"],
 			"matchDepTypes": ["engines"],
 			"enabled": false
