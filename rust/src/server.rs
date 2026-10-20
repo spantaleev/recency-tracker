@@ -188,7 +188,19 @@ async fn serve(
             _=stop.changed()=>break,
             Some(_)=tasks.join_next(), if !tasks.is_empty()=>{},
             accepted=listener.accept()=>{
-                let (stream, _) = accepted?;
+                let (stream, _) = match accepted {
+                    Ok(accepted) => accepted,
+                    Err(error) => {
+                        // Descriptor exhaustion and aborted accepts are transient.
+                        // Keep both listeners alive without a busy retry loop.
+                        eprintln!("listener accept failed: {:?}", error.kind());
+                        tokio::select! {
+                            _=stop.changed()=>break,
+                            _=tokio::time::sleep(Duration::from_millis(250))=>{}
+                        }
+                        continue;
+                    }
+                };
                 let Ok(permit) = budget.clone().try_acquire_owned() else {continue};
                 let app = app.clone();
                 let mut stop = stop.clone();
