@@ -17,7 +17,7 @@ concurrency:
 jobs:
   test:
     name: Node.js ${{ matrix.node }}
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     timeout-minutes: 10
     strategy:
       fail-fast: false
@@ -70,7 +70,7 @@ jobs:
     name: Publish container
     needs: [test, container]
     if: github.event_name != 'pull_request' && (github.ref == 'refs/heads/master' || startsWith(github.ref, 'refs/tags/v'))
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     timeout-minutes: 20
     permissions:
       contents: read
