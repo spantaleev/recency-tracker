@@ -225,6 +225,21 @@ and temporary local HTTP/WebSocket servers; no running tracker or configuration 
 They cover publishing, subscriptions, browser reconnect behavior, connection cleanup,
 and catching up from filesystem storage.
 
+### Publishing a release
+
+`package.json` is the version source. Update its version and the matching root
+versions in `package-lock.json` together (for example, with
+`npm version 2.0.1 --no-git-tag-version`), then commit and push the change.
+Push the matching `v2.0.1` Git tag to publish a release image. CI refuses release
+tags that do not match both package files.
+
+On pull requests, CI runs the Node.js test matrix and builds and smoke-tests both
+container architectures on native runners. Pushes to `master` publish `edge` only
+after those checks pass. Release tags run the same checks before publishing the
+exact version, minor, major, and `latest` image tags. The workflow uses the
+repository's `GITHUB_TOKEN`; no registry password is required. GitHub releases can
+then be published with migration notes after verifying the image is available.
+
 
 Upgrading from 1.x to 2.x
 ------------------------
