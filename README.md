@@ -256,6 +256,11 @@ server, and the v2 browser client cannot connect to a v1 SockJS server.
  * Replace any copied `recency-tracker.js` with the v2 file and update its asset
    version or URL so browsers fetch it. Open pages running the old client must reload.
  * Remove the SockJS script and any dependency on it in your script loader.
+ * Update monitoring that probes the SockJS-only `/subscribe/info` endpoint; it
+   no longer exists. For subscriber health, request `/ping` and require HTTP 200
+   with body `subscriber server up`. A WebSocket check that connects to `/subscribe`
+   and verifies ping/pong also checks the proxy's upgrade handling, without needing
+   a publishing secret or writing resource data.
  * Existing subscription URLs such as `https://tracker.example/subscribe` can stay:
    the new client converts them to `wss://` automatically.
  * Configure reverse proxies to forward WebSocket upgrades at `/subscribe`,
