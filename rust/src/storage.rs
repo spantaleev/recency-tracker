@@ -22,14 +22,33 @@ impl Storage {
         if !path.is_dir() {
             return Err(io::Error::other("storage path is not a directory"));
         }
+        let lock_path = path.join(".recency-tracker.lock");
         let mut options = std::fs::OpenOptions::new();
-        options.write(true).create(true).truncate(false);
+        options.read(true).write(true).create_new(true);
         #[cfg(unix)]
         {
             use std::os::unix::fs::OpenOptionsExt;
-            options.mode(0o600);
+            options.mode(0o666);
         }
-        let lock = options.open(path.join(".recency-tracker.lock"))?;
+        let lock = match options.open(&lock_path) {
+            Ok(file) => file,
+            Err(e) if e.kind() == io::ErrorKind::AlreadyExists => {
+                // Unix advisory locking works with a read-only descriptor. This lets
+                // an explicitly changed UID lock readable state left by the old UID.
+                #[cfg(unix)]
+                {
+                    File::open(&lock_path)?
+                }
+                #[cfg(not(unix))]
+                {
+                    std::fs::OpenOptions::new()
+                        .read(true)
+                        .write(true)
+                        .open(&lock_path)?
+                }
+            }
+            Err(e) => return Err(e),
+        };
         lock.try_lock().map_err(|_| {
             io::Error::other("storage is already locked or does not support locking")
         })?;
@@ -78,10 +97,21 @@ impl Storage {
         let destination = Self::filename(&directory.path, resource);
         let bytes = serde_json::to_vec(record).map_err(io::Error::other)?;
         tokio::task::spawn_blocking(move || {
-            let mut temporary = tempfile::Builder::new()
-                .prefix(".recency-")
-                .suffix(".tmp")
-                .tempfile_in(&directory.path)?;
+            let mut builder = tempfile::Builder::new();
+            builder.prefix(".recency-").suffix(".tmp");
+            // Match v2's ordinary file creation permissions, subject to the process
+            // umask. Preserve an existing record's explicit permissions on replacement.
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt;
+                builder.permissions(std::fs::Permissions::from_mode(0o666));
+            }
+            let mut temporary = builder.tempfile_in(&directory.path)?;
+            if let Ok(metadata) = std::fs::metadata(&destination) {
+                temporary
+                    .as_file()
+                    .set_permissions(metadata.permissions())?;
+            }
             temporary.write_all(&bytes)?;
             temporary.as_file().sync_all()?;
             temporary.persist(destination).map_err(|e| e.error)?;
@@ -161,5 +191,30 @@ mod tests {
         let bytes = std::fs::read(Storage::filename(&moved, &r)).unwrap();
         assert_eq!(serde_json::from_slice::<Record>(&bytes).unwrap(), old);
         std::fs::rename(&moved, dir.path()).unwrap();
+    }
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn replacement_preserves_existing_permissions() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = tempfile::tempdir().unwrap();
+        let r = resource();
+        let path = Storage::filename(dir.path(), &r);
+        std::fs::write(&path, b"{\"version\":\"1\",\"data\":{}}").unwrap();
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o640)).unwrap();
+        let storage = Storage::open(Some(dir.path().to_owned())).unwrap();
+        storage
+            .write(
+                &r,
+                &Record {
+                    version: Version("2".into()),
+                    data: json!({}),
+                },
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            std::fs::metadata(path).unwrap().permissions().mode() & 0o777,
+            0o640
+        );
     }
 }
