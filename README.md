@@ -151,7 +151,7 @@ Installation
 ### Container (recommended for self-hosting)
 
 Images are published to `ghcr.io/spantaleev/recency-tracker` for Linux amd64 and
-arm64. Use an exact release tag such as `3.0.0` for deliberate upgrades. The `3.0`,
+arm64. Use an exact release tag such as `3.1.0` for deliberate upgrades. The `3.1`,
 `3`, and `latest` tags follow stable releases; `edge` follows the development branch.
 
 Copy `config/container.json.dist` to a local `config.json` and **change the publishing
@@ -165,7 +165,7 @@ bound to localhost for a reverse proxy:
 ```yaml
 services:
   recency-tracker:
-    image: ghcr.io/spantaleev/recency-tracker:3.0.0
+    image: ghcr.io/spantaleev/recency-tracker:3.1.0
     restart: unless-stopped
     read_only: true
     ports:
