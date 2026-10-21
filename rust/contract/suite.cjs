@@ -22,16 +22,19 @@ async function until(check, milliseconds = 5000) {
  while (!(await check())) { assert(Date.now() < end, 'Timed out waiting for expected behavior'); await delay(10); }
 }
 async function freePort() { const s=net.createServer(); s.listen(0,'127.0.0.1');await once(s,'listening');const p=s.address().port;await new Promise(r=>s.close(r));return p; }
-async function fixture(t, {limits, filesystem=true, listenerHost='127.0.0.1'} = {}) {
+async function fixture(t, {limits, filesystem=true, listenerHost='127.0.0.1', allowedOrigins, overrideOrigins} = {}) {
  const directory=await fs.mkdtemp(path.join(os.tmpdir(),'recency-contract-'));
  const storage=path.join(directory,'data');await fs.mkdir(storage);
- const config={publisher:{ip:listenerHost,port:await freePort(),secret:'overridden'},subscriber:{ip:listenerHost,port:await freePort()},persister:{type:filesystem?'filesystem':'none',memory:{maxItems:2},filesystem:{storagePath:storage}},...(limits?{limits}:{})};
+ const config={publisher:{ip:listenerHost,port:await freePort(),secret:'overridden'},subscriber:{ip:listenerHost,port:await freePort(),...(allowedOrigins===undefined?{}:{allowedOrigins})},persister:{type:filesystem?'filesystem':'none',memory:{maxItems:2},filesystem:{storagePath:storage}},...(limits?{limits}:{})};
  const configFile=path.join(directory,'config.json');await fs.writeFile(configFile,JSON.stringify(config));
  let child; const sockets=[];
  const pub=`http://${listenerHost}:${config.publisher.port}`,sub=`http://${listenerHost}:${config.subscriber.port}`;
  async function start(selected=implementation) {
   const command=selected==='node'?process.execPath:path.join(root,'rust/target/debug/recency-tracker');
-  child=spawn(command,selected==='node'?['bin/server']:[],{cwd:selected==='node'?nodeRoot:root,env:{...process.env,RECENCY_TRACKER_CONFIG:configFile,RECENCY_TRACKER_PUBLISHER_SECRET:secret},stdio:['ignore','ignore','pipe']});
+  const env={...process.env,RECENCY_TRACKER_CONFIG:configFile,RECENCY_TRACKER_PUBLISHER_SECRET:secret};
+  delete env.RECENCY_TRACKER_SUBSCRIBER_ALLOWED_ORIGINS;
+  if(overrideOrigins!==undefined)env.RECENCY_TRACKER_SUBSCRIBER_ALLOWED_ORIGINS=JSON.stringify(overrideOrigins);
+  child=spawn(command,selected==='node'?['bin/server']:[],{cwd:selected==='node'?nodeRoot:root,env,stdio:['ignore','ignore','pipe']});
   let logs='';child.stderr.on('data',d=>{logs=(logs+d).slice(-4000);});
   await until(async()=>{assert.equal(child.exitCode,null,logs);try{return (await fetch(pub+'/ping',timeout())).ok;}catch{return false;}});
  }
@@ -192,4 +195,35 @@ test('invalid upgrade headers do not consume WebSocket admission', {skip:impleme
  }
  const client=await f.connect();client.send({type:'subscribe',resource:'/example/handshake',version:0});
  await f.publish('/example/handshake','1');await until(()=>client.messages.length===1);
+});
+
+async function deniedOrigin(f, headers) {
+ const socket=new WebSocket(f.sub.replace('http:','ws:')+'/subscribe',{headers});
+ socket.on('error',()=>{});
+ try { await assert.rejects(once(socket,'open',timeout()),/403/); }
+ finally { socket.terminate(); }
+}
+
+test('configured origins reject missing, foreign and repeated headers before client admission', {skip:implementation!=='rust'},async t=>{
+ const allowed='https://app.example.test';
+ const f=await fixture(t,{limits:{connections:1},allowedOrigins:[allowed]});
+ for(const origin of [undefined,'null','https://other.example.test',allowed+'/',allowed+'.attacker.test']) {
+  await deniedOrigin(f,origin===undefined?{}:{Origin:origin});
+ }
+ await deniedOrigin(f,{Origin:[allowed,allowed]});
+ assert.equal((await fetch(f.sub+'/ping')).status,200);
+ const c=await f.connect({origin:allowed});c.send({type:'subscribe',resource:'/example/origin',version:0});
+ await f.publish('/example/origin','1');await until(()=>c.messages.length===1);
+ assert.equal(c.messages[0].version,'1');
+});
+
+test('origin environment policy overrides config and empty policy denies all upgrades', {skip:implementation!=='rust'},async t=>{
+ const allowed='https://app.example.test',old='https://old.example.test';
+ const f=await fixture(t,{allowedOrigins:[old],overrideOrigins:[allowed]});
+ await deniedOrigin(f,{Origin:old});
+ const c=await f.connect({origin:allowed});c.send({type:'subscribe',resource:'/example/override',version:0});
+ await f.publish('/example/override','1');await until(()=>c.messages.length===1);
+ const blocked=await fixture(t,{allowedOrigins:[]});
+ await deniedOrigin(blocked,{Origin:allowed});await deniedOrigin(blocked,{});
+ assert.equal((await fetch(blocked.pub+'/ping')).status,200);
 });

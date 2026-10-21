@@ -189,6 +189,14 @@ the host, add `127.0.0.1:9998:9998`. Put TLS and WebSocket proxying in front of 
 subscriber endpoint for public browser connections (see the upgrade notes below).
 Both servers offer `/ping` for HTTP health checks.
 
+The subscriber endpoint is unauthenticated: any reachable client can subscribe to
+any resource and receive its `data`. Protect private feeds with proxy/network access
+controls. Optional [subscriber Origin restrictions](rust/README.md#subscriber-trust-and-browser-origins)
+prevent unwanted browser sites from subscribing; they do not authenticate users or
+stop non-browser clients from forging an Origin. Configure each environment using
+`subscriber.allowedOrigins` or `RECENCY_TRACKER_SUBSCRIBER_ALLOWED_ORIGINS`.
+
+
 To migrate existing storage, mount the directory containing the resource `.json`
 files at `/data`; no file conversion is needed. Stop the old tracker before starting
 its replacement, and deploy a matching browser client when upgrading from v1.

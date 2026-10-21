@@ -22,7 +22,12 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
         Err(std::env::VarError::NotPresent) => None,
         Err(_) => return Err("publisher secret must be valid Unicode".into()),
     };
-    let config = Config::load(&path, secret)?;
+    let mut config = Config::load(&path, secret)?;
+    match std::env::var("RECENCY_TRACKER_SUBSCRIBER_ALLOWED_ORIGINS") {
+        Ok(origins) => config.override_allowed_origins(&origins)?,
+        Err(std::env::VarError::NotPresent) => {}
+        Err(_) => return Err("allowed origins override must be valid Unicode".into()),
+    }
     let server = Server::start(config).await?;
     eprintln!(
         "recency-tracker {} listening on publisher {} and subscriber {}",

@@ -1,5 +1,5 @@
 use crate::{
-    config::Config,
+    config::{Config, Origin},
     model::{Record, Resource, SubscriptionCommand, Version},
     storage::Storage,
     tracker::{self, Connection, Tracker},
@@ -46,6 +46,7 @@ struct App {
     secret: [u8; 32],
     stop: watch::Receiver<bool>,
     heartbeat: Duration,
+    allowed_origins: Option<Arc<[Origin]>>,
 }
 
 pub struct Server {
@@ -76,6 +77,7 @@ impl Server {
             secret: Sha256::digest(config.secret.as_bytes()).into(),
             stop: stop_rx.clone(),
             heartbeat: config.heartbeat,
+            allowed_origins: config.allowed_origins.map(Arc::from),
         };
         let publisher_app = Router::new()
             .route("/ping", get(|| async { "publisher server up" }))
@@ -347,6 +349,15 @@ async fn publish(State(app): State<App>, headers: HeaderMap, body: Bytes) -> Res
     }
 }
 async fn upgrade(State(app): State<App>, request: Request) -> Response {
+    if let Some(allowed) = &app.allowed_origins {
+        let mut values = request.headers().get_all("origin").iter();
+        let origin = values.next().and_then(|value| value.to_str().ok());
+        if values.next().is_some()
+            || !origin.is_some_and(|value| allowed.iter().any(|entry| entry.as_str() == value))
+        {
+            return failure(StatusCode::FORBIDDEN, "origin not allowed");
+        }
+    }
     let ws = match Upgrade::new(request) {
         Ok(ws) => ws,
         Err(status) => return status.into_response(),

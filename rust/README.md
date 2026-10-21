@@ -55,6 +55,45 @@ port 9999 through a TLS/WebSocket reverse proxy. `/ping` and `/recency-tracker.j
 keep their existing paths and bodies. Explicit UID/GID selection and a read-only
 root filesystem are supported. The storage directory must already exist.
 
+## Subscriber trust and browser origins
+
+The subscriber endpoint has no built-in user authentication or resource authorization.
+Any client able to reach it can request any resource and receive its notification
+`data`. Resource names are not credentials. Keep sensitive payloads behind an
+appropriate authenticated proxy/network boundary or publish only data suitable for
+all clients that can reach the endpoint. A private publisher port and publishing
+secret do not protect subscriptions.
+
+An optional exact Origin allowlist limits which browser sites may open WebSockets:
+
+```json
+{
+  "subscriber": {
+    "ip": "0.0.0.0",
+    "port": 9999,
+    "allowedOrigins": ["https://app.example.test"]
+  }
+}
+```
+
+Copy the application's actual browser `location.origin`: scheme, hostname and
+nondefault port, with no path or trailing slash. Wildcards, credentials and paths
+are rejected. With a configured list, missing, `null`, repeated and unlisted Origin
+headers receive HTTP 403 before tracker admission. An empty list denies all
+WebSocket upgrades. Omitting the setting preserves unrestricted v2/v3 behavior;
+explicit JSON `null` is rejected. Health checks and PHP publishing are unaffected.
+
+For different deployment environments, `RECENCY_TRACKER_SUBSCRIBER_ALLOWED_ORIGINS`
+overrides the file policy with a JSON array, for example
+`["http://localhost:20080"]`. An empty/malformed override prevents startup; `[]`
+denies all upgrades. At most 256 origins are supported. Non-browser WebSocket probes
+must send an allowed Origin when the policy is enabled.
+
+**Origin checking is not authentication.** Browsers enforce the header, but a
+non-browser client can forge it. This policy helps prevent cross-site browser access;
+it does not make publicly reachable notification data private. Review the proxy's
+access controls separately before putting private application data on this channel.
+
 Optional `limits` settings supplement existing configuration:
 
 ```json
@@ -121,6 +160,8 @@ Intentional cleanup changes affect ambiguous input and failure handling:
 - Storage failures return HTTP 500 without announcing a successful publication.
   Subscriber storage errors close with 1011. Requests have a ten-second deadline;
   accepted tracker work continues if its HTTP client disconnects or times out.
+  The ten-second header deadline also expires idle HTTP keep-alive connections;
+  upgraded WebSockets retain the separate heartbeat policy.
   Subscription operations also have a ten-second deadline and remain cancellable
   by shutdown.
 
