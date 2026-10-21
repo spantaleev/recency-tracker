@@ -22,6 +22,16 @@
 			"enabled": false
 		}
 	],
+	"customManagers": [
+		{
+			"customType": "regex",
+			"managerFilePatterns": [".github/workflows/rust.yml"],
+			"matchStrings": ["CARGO_AUDIT_VERSION: \"(?<currentValue>[0-9]+\\.[0-9]+\\.[0-9]+)\""],
+			"datasourceTemplate": "crate",
+			"depNameTemplate": "cargo-audit",
+			"versioningTemplate": "semver"
+		}
+	],
 	"prConcurrentLimit": 3,
 	"rebaseWhen": "behind-base-branch",
 	"automerge": false,

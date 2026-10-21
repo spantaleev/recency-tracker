@@ -190,7 +190,11 @@ new lock. No data conversion is required for compatible records. Keep the unchan
 browser/PHP integration in place while testing the replacement.
 
 Cargo dependencies, Rust/musl, build images, Actions and audit tools still require
-maintenance. Commit `Cargo.lock`, use locked builds, run a current `cargo audit`,
+maintenance. CI runs a dedicated security-audit job using a pinned `cargo-audit`
+executable and freshly fetched advisories. Renovate updates the audit tool as well
+as application dependencies; the binary cache is invalidated when its toolchain
+or workflow configuration changes. Update local audit tools if they cannot parse
+the current advisory database. Commit `Cargo.lock`, use locked builds, run a current `cargo audit`,
 track builder/toolchain updates through Renovate, and rebuild static binaries for
 security fixes. A scratch image having few OS packages does not make its embedded
 libraries maintenance-free. The validation workflow has no registry credentials or publishing job.
