@@ -171,3 +171,25 @@ test("Node and Rust read each other's persisted records without conversion",asyn
  await f.start('rust');let c=await f.connect();c.send({type:'subscribe',resource:'/example/migration',version:0});await until(()=>c.messages.length===1);assert.deepEqual(c.messages[0].data,{before:true});
  await f.publish('/example/migration','2',{after:true});await f.stop();await f.start('node');c=await f.connect();c.send({type:'subscribe',resource:'/example/migration',version:0});await until(()=>c.messages.length===1);assert.deepEqual(c.messages[0].data,{after:true});
 });
+
+test('invalid upgrade headers do not consume WebSocket admission', {skip:implementation!=='rust'}, async t=>{
+ const http=require('node:http');
+ const f=await fixture(t,{limits:{connections:1}});
+ const valid={Connection:'Upgrade',Upgrade:'websocket','Sec-WebSocket-Version':'13','Sec-WebSocket-Key':'dGhlIHNhbXBsZSBub25jZQ=='};
+ for(const change of [
+  {'Sec-WebSocket-Key':'not-base64'},
+  {'Sec-WebSocket-Key':Buffer.alloc(15).toString('base64')},
+  {'Sec-WebSocket-Key':Buffer.alloc(17).toString('base64')},
+  {'Sec-WebSocket-Version':'12'},
+  {Connection:'keep-alive'},
+  {Upgrade:'other-protocol'},
+ ]) {
+  const status=await new Promise((resolve,reject)=>{
+   const req=http.get(f.sub+'/subscribe',{headers:{...valid,...change},agent:false},res=>{res.resume();resolve(res.statusCode);});
+   req.on('error',reject);req.setTimeout(3000,()=>req.destroy(Error('HTTP probe timeout')));
+  });
+  assert.equal(status,400);
+ }
+ const client=await f.connect();client.send({type:'subscribe',resource:'/example/handshake',version:0});
+ await f.publish('/example/handshake','1');await until(()=>client.messages.length===1);
+});

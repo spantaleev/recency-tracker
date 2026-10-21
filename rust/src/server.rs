@@ -3,19 +3,18 @@ use crate::{
     model::{Record, Resource, SubscriptionCommand, Version},
     storage::Storage,
     tracker::{self, Connection, Tracker},
+    websocket::{CloseFrame, Error as WebSocketError, Message, Upgrade, WebSocket},
 };
 use axum::{
     Json, Router,
     body::Bytes,
-    extract::{
-        DefaultBodyLimit, State, WebSocketUpgrade,
-        ws::{CloseFrame, Message, WebSocket},
-    },
+    extract::{DefaultBodyLimit, Request, State},
     http::{HeaderMap, StatusCode},
     middleware::{self, Next},
     response::{IntoResponse, Response},
     routing::{get, post},
 };
+use futures_util::{SinkExt, StreamExt};
 use hyper_util::{
     rt::{TokioIo, TokioTimer},
     service::TowerToHyperService,
@@ -39,7 +38,6 @@ use tokio::{
     task::{JoinHandle, JoinSet},
 };
 
-const MAX_MESSAGE: usize = 64 * 1024;
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(10);
 const WRITE_TIMEOUT: Duration = Duration::from_secs(5);
 #[derive(Clone)]
@@ -348,7 +346,11 @@ async fn publish(State(app): State<App>, headers: HeaderMap, body: Bytes) -> Res
         Err(e) => tracker_failure(e),
     }
 }
-async fn upgrade(State(app): State<App>, ws: WebSocketUpgrade) -> Response {
+async fn upgrade(State(app): State<App>, request: Request) -> Response {
+    let ws = match Upgrade::new(request) {
+        Ok(ws) => ws,
+        Err(status) => return status.into_response(),
+    };
     if *app.stop.borrow() {
         return failure(StatusCode::SERVICE_UNAVAILABLE, "server is stopping");
     }
@@ -356,12 +358,7 @@ async fn upgrade(State(app): State<App>, ws: WebSocketUpgrade) -> Response {
         Ok(c) => c,
         Err(e) => return tracker_failure(e),
     };
-    ws.read_buffer_size(4096)
-        .write_buffer_size(0)
-        .max_message_size(MAX_MESSAGE)
-        .max_frame_size(MAX_MESSAGE)
-        .on_upgrade(move |socket| socket_loop(socket, app, connection))
-        .into_response()
+    ws.on_upgrade(move |socket| socket_loop(socket, app, connection))
 }
 async fn send(socket: &mut WebSocket, message: Message) -> bool {
     matches!(
@@ -373,7 +370,7 @@ async fn close(socket: &mut WebSocket, code: u16, reason: &'static str) {
     let _ = send(
         socket,
         Message::Close(Some(CloseFrame {
-            code,
+            code: code.into(),
             reason: reason.into(),
         })),
     )
@@ -396,18 +393,18 @@ async fn socket_loop(mut socket: WebSocket, mut app: App, mut connection: Connec
                 let Some(update)=update else{break};
                 if !send(&mut socket,Message::Text(update.text.to_string().into())).await{break;}
             }
-            message=socket.recv()=>{
+            message=socket.next()=>{
                 let text=match message {
                     Some(Ok(Message::Text(text)))=>text,
                     Some(Ok(Message::Pong(_)))=>{alive=true;continue;}
-                    Some(Ok(Message::Ping(_)))=>continue,
+                    Some(Ok(Message::Ping(_)))|Some(Ok(Message::Frame(_)))=>continue,
                     Some(Ok(Message::Binary(_)))=>{close(&mut socket,1003,"Text messages required").await;break;}
                     Some(Ok(Message::Close(_)))|None=>break,
                     Some(Err(error))=>{
-                        let code=match error.into_inner().downcast::<tungstenite::Error>().as_deref() {
-                            Ok(tungstenite::Error::Capacity(_))=>1009,
-                            Ok(tungstenite::Error::Utf8(_))=>1007,
-                            Ok(tungstenite::Error::Protocol(_))=>1002,
+                        let code=match error {
+                            WebSocketError::Capacity(_)=>1009,
+                            WebSocketError::Utf8(_)=>1007,
+                            WebSocketError::Protocol(_)=>1002,
                             _=>break,
                         };
                         close(&mut socket,code,"Invalid or oversized message").await;break;
@@ -494,12 +491,18 @@ mod tests {
     async fn upgraded_io_retains_its_admission_permit() {
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let address = listener.local_addr().unwrap();
-        let app = Router::new().route(
-            "/subscribe",
-            get(|ws: WebSocketUpgrade| async {
-                ws.on_upgrade(|mut socket| async move { while socket.recv().await.is_some() {} })
-            }),
-        );
+        let app =
+            Router::new().route(
+                "/subscribe",
+                get(|request: Request| async {
+                    match Upgrade::new(request) {
+                        Ok(ws) => ws.on_upgrade(|mut socket| async move {
+                            while socket.next().await.is_some() {}
+                        }),
+                        Err(status) => status.into_response(),
+                    }
+                }),
+            );
         let (stop, stopped) = watch::channel(false);
         let task = tokio::spawn(serve(listener, app, stopped, 1));
         let mut socket = TcpStream::connect(address).await.unwrap();
