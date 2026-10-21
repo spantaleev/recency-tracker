@@ -223,7 +223,8 @@ binary directly; see `resources/supervisord-config.conf` for an example.
 Set `RECENCY_TRACKER_CONFIG` to load a configuration file from a different path.
 Otherwise, the server reads `config/config.json` from its working directory.
 `RECENCY_TRACKER_PUBLISHER_SECRET`, when set, overrides `publisher.secret` in that
-file without changing it. An explicitly empty environment secret prevents startup.
+file without changing it. An empty secret or the shipped example placeholder prevents startup. Use a high-entropy
+secret, for example one generated with `openssl rand -hex 32`.
 
 
 Testing

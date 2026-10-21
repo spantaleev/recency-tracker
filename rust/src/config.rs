@@ -109,6 +109,9 @@ impl Config {
             .or(raw.publisher.secret)
             .filter(|s| !s.is_empty())
             .ok_or("publisher secret must not be empty")?;
+        if secret == "YOUR_PUBLISHING_SECRET_HERE" {
+            return Err("publisher secret must replace the example placeholder".into());
+        }
         let storage = match raw.persister.r#type.as_deref() {
             None | Some("none") => None,
             Some("filesystem") => Some(
@@ -156,6 +159,13 @@ mod tests {
         assert_eq!(c.storage, Some(PathBuf::from("/data")));
         assert!(Config::parse(bytes, Some(String::new())).is_err());
         assert!(Config::parse(b"{", None).is_err());
+    }
+    #[test]
+    fn example_secret_is_rejected_in_file_and_override() {
+        let bytes = include_bytes!("../../config/container.json.dist");
+        assert!(Config::parse(bytes, None).is_err());
+        assert!(Config::parse(bytes, Some("YOUR_PUBLISHING_SECRET_HERE".into())).is_err());
+        assert!(Config::parse(bytes, Some("synthetic-real-secret".into())).is_ok());
     }
     #[test]
     fn listener_hosts_accept_existing_ip_and_dns_configurations() {
