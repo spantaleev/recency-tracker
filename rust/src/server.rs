@@ -488,6 +488,53 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn idle_keep_alive_expires_and_releases_admission() {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let (stop, stopped) = watch::channel(false);
+        let task = tokio::spawn(serve(
+            listener,
+            Router::new().route("/ping", get(|| async { "up" })),
+            stopped,
+            1,
+        ));
+        let mut idle = TcpStream::connect(address).await.unwrap();
+        idle.write_all(b"GET /ping HTTP/1.1\r\nHost: localhost\r\n\r\n")
+            .await
+            .unwrap();
+        let mut response = Vec::new();
+        while !response.ends_with(b"\r\n\r\nup") {
+            let read = tokio::time::timeout(Duration::from_secs(1), idle.read_buf(&mut response))
+                .await
+                .unwrap()
+                .unwrap();
+            assert_ne!(read, 0);
+        }
+        let mut byte = [0];
+        let read = tokio::time::timeout(
+            REQUEST_TIMEOUT + Duration::from_secs(2),
+            idle.read(&mut byte),
+        )
+        .await
+        .unwrap()
+        .unwrap();
+        assert_eq!(
+            read, 0,
+            "idle keep-alive should close without another request"
+        );
+        let mut recovered = TcpStream::connect(address).await.unwrap();
+        recovered
+            .write_all(b"GET /ping HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n")
+            .await
+            .unwrap();
+        let mut response = String::new();
+        recovered.read_to_string(&mut response).await.unwrap();
+        assert!(response.starts_with("HTTP/1.1 200"), "{response}");
+        stop.send(true).unwrap();
+        task.await.unwrap().unwrap();
+    }
+
+    #[tokio::test]
     async fn upgraded_io_retains_its_admission_permit() {
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let address = listener.local_addr().unwrap();
