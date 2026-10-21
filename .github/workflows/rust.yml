@@ -44,11 +44,22 @@ jobs:
       - run: npm test
       - run: python3 -m unittest discover -s rust/release -p 'test_*.py'
       - name: Install pinned Rust toolchain
-        run: rustup toolchain install 1.98.0 --profile minimal --component rustfmt --component clippy
-      - run: cargo +1.98.0 fmt --manifest-path rust/Cargo.toml --check
-      - run: cargo +1.98.0 clippy --manifest-path rust/Cargo.toml --locked --all-targets -- -D warnings
-      - run: cargo +1.98.0 test --manifest-path rust/Cargo.toml --locked
-      - run: cargo +1.98.0 build --manifest-path rust/Cargo.toml --locked
+        run: |
+          python3 - <<'PY'
+          import os, pathlib, subprocess, tomllib
+          toolchain = tomllib.loads(pathlib.Path('rust/rust-toolchain.toml').read_text())['toolchain']
+          command = ['rustup', 'toolchain', 'install', toolchain['channel'],
+                     '--profile', toolchain.get('profile', 'minimal')]
+          for component in toolchain.get('components', []):
+              command.extend(['--component', component])
+          subprocess.run(command, check=True)
+          with open(os.environ['GITHUB_ENV'], 'a') as output:
+              output.write('RUSTUP_TOOLCHAIN=' + toolchain['channel'] + '\n')
+          PY
+      - run: cargo fmt --manifest-path rust/Cargo.toml --check
+      - run: cargo clippy --manifest-path rust/Cargo.toml --locked --all-targets -- -D warnings
+      - run: cargo test --manifest-path rust/Cargo.toml --locked
+      - run: cargo build --manifest-path rust/Cargo.toml --locked
       - name: Test generic consumer compatibility against Node and Rust
         env:
           RECENCY_TEST_NODE_ROOT: ${{ github.workspace }}/node-reference

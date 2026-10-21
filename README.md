@@ -211,7 +211,7 @@ mounts, and an arbitrary runtime UID. Node.js 22 or newer and Docker are require
 Install the Rust toolchain pinned in `rust/rust-toolchain.toml`, then:
 
 ```sh
-cargo build --manifest-path rust/Cargo.toml --locked --release
+(cd rust && cargo build --locked --release)
 cp config/config.json.dist config/config.json
 # Edit config/config.json, especially the publishing secret and storage path.
 ./rust/target/release/recency-tracker
@@ -232,7 +232,7 @@ Testing
 The Rust unit and failure-path tests run with:
 
 ```sh
-cargo test --manifest-path rust/Cargo.toml --locked
+(cd rust && cargo test --locked)
 npm ci --engine-strict
 npm test
 ```

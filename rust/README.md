@@ -11,13 +11,14 @@ operations run outside the event loop. This intentionally favors simple ordering
 and predictable errors over parallel filesystem publications. Independent health
 checks, WebSocket I/O and heartbeat timers remain responsive during storage work.
 
-Build and test from the repository root:
+Build and test from the repository root. Run Rust commands inside `rust/` so
+Rustup selects the toolchain pinned in [`rust-toolchain.toml`](rust-toolchain.toml):
 
 ```sh
-cargo +1.98.0 fmt --manifest-path rust/Cargo.toml --check
-cargo +1.98.0 clippy --manifest-path rust/Cargo.toml --locked --all-targets -- -D warnings
-cargo +1.98.0 test --manifest-path rust/Cargo.toml --locked
-cargo +1.98.0 build --manifest-path rust/Cargo.toml --locked
+(cd rust && cargo fmt --check)
+(cd rust && cargo clippy --locked --all-targets -- -D warnings)
+(cd rust && cargo test --locked)
+(cd rust && cargo build --locked)
 npm ci --engine-strict
 npm test
 # Check out v2.0.0 (3bdfc00524e977d502ca6614642d6a302d51e00f) into node-reference/
