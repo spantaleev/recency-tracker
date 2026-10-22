@@ -46,17 +46,17 @@ class Decide(unittest.TestCase):
     def decide(self, **overrides):
         return plan.decide(**{"forced": False, "changed": True, "ci": "success", "age": 20 * MINUTE, "landing": [], **overrides})[0]
 
-    def test_releases_a_quiet_green_change(self):
+    def test_releases_a_green_change_right_away(self):
         self.assertTrue(self.decide())
+        self.assertTrue(self.decide(age=MINUTE))
 
     def test_never_releases_unchanged_images(self):
         self.assertFalse(self.decide(changed=False))
         self.assertFalse(self.decide(changed=False, forced=True))
 
-    def test_waits_for_green_ci_a_quiet_moment_and_pending_renovate_prs(self):
+    def test_waits_for_green_ci_and_pending_renovate_prs(self):
         self.assertFalse(self.decide(ci="failure"))
         self.assertFalse(self.decide(ci="in_progress", age=200 * MINUTE))
-        self.assertFalse(self.decide(age=5 * MINUTE))
         self.assertFalse(self.decide(landing=[36]))
 
     def test_cap_overrides_pending_prs(self):

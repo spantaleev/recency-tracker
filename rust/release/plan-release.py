@@ -17,7 +17,6 @@ import sys
 # Paths that end up in the published image (mirrors Dockerfile and .dockerignore).
 IMAGE_PATHS = ["Dockerfile", ".dockerignore", "LICENSE.txt", "resources/static",
                "rust/Cargo.toml", "rust/Cargo.lock", "rust/src", "rust/container"]
-QUIET_MIN = datetime.timedelta(minutes=15)
 QUIET_CAP = datetime.timedelta(minutes=90)
 CALVER = re.compile(r"v?([0-9]{4})\.([0-9]{2})\.([0-9]{2})\.([0-9]+)")
 FAILED = {"FAILURE", "CANCELLED", "TIMED_OUT", "ACTION_REQUIRED", "STARTUP_FAILURE", "ERROR"}
@@ -58,11 +57,9 @@ def decide(*, forced, changed, ci, age, landing):
         return False, f"CI for this commit is {ci}"
     if age >= QUIET_CAP:
         return True, f"master has been quiet for {minutes(age)} (cap reached)"
-    if age < QUIET_MIN:
-        return False, f"last commit is only {minutes(age)} old"
     if landing:
         return False, "waiting for Renovate PR(s) that may land soon: " + ", ".join(f"#{n}" for n in landing)
-    return True, f"master has been quiet for {minutes(age)} and no Renovate PR is about to land"
+    return True, "CI passed and no Renovate PR is about to land"
 
 
 def run(*command):

@@ -14,16 +14,15 @@ for releases that wait on Renovate PRs or the 90-minute cap.
 - something that ends up in the image changed since the last tag (`IMAGE_PATHS`; docs, tests
   and CI changes alone are never released)
 - CI passed for that commit
-- the commit is at least 15 minutes old, and no open Renovate PR may still land (any that's not
-  draft, conflicted, rejected or failing checks). This folds a burst of Renovate merges into one
-  release.
+- no open Renovate PR may still land (any that's not draft, conflicted, rejected or failing
+  checks). This folds a burst of Renovate merges into one release.
 - or, regardless of pending PRs, the commit is at least 90 minutes old
 
 The run then rebuilds and validates both architectures with the version embedded, tags the
 commit and publishes it. That takes about 20 minutes.
 
-**Expected latency:** after a normal merge, CI takes about 20 minutes and the release about
-another 20, so a release appears roughly 40–50 minutes later. A Renovate PR that is still
+**Expected latency:** after a normal merge, CI takes about 10–20 minutes and the release about
+another 20, so a release appears roughly 30–40 minutes later. A Renovate PR that is still
 pending, or one ArtiDezi never merges, delays it until the next 30-minute check after the PR
 settles or the 90-minute cap passes, plus the release time.
 
