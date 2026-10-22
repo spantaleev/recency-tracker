@@ -5,7 +5,7 @@ name: Release
 # Renovate PRs that may still land, so a burst of merges becomes one release.
 # Manual runs release master immediately if the image changed since the last release.
 # The tag is pushed by this workflow (GITHUB_TOKEN tags trigger no other workflows),
-# so it validates and publishes the release itself.
+# so it validates and publishes the release itself, then creates its GitHub Release.
 on:
   workflow_run:
     workflows: [CI]
@@ -84,3 +84,16 @@ jobs:
     with:
       channel: stable
       version: ${{ needs.plan.outputs.version }}
+
+  github-release:
+    needs: [plan, publish]
+    runs-on: ubuntu-26.04
+    timeout-minutes: 5
+    permissions:
+      contents: write
+    steps:
+      - name: Create the GitHub Release once its images are published
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: v${{ needs.plan.outputs.version }}
+        run: gh release create "$TAG" --repo "$GITHUB_REPOSITORY" --verify-tag --generate-notes --latest --title "$TAG"

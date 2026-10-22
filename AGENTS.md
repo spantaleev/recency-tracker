@@ -19,7 +19,8 @@ for releases that wait on Renovate PRs or the 90-minute cap.
 - or, regardless of pending PRs, the commit is at least 90 minutes old
 
 The run then rebuilds and validates both architectures with the version embedded, tags the
-commit and publishes it. That takes about 20 minutes.
+commit, publishes it and creates a GitHub Release with generated notes. That takes about
+20 minutes.
 
 **Expected latency:** after a normal merge, CI takes about 10–20 minutes and the release about
 another 20, so a release appears roughly 30–40 minutes later. A Renovate PR that is still
