@@ -1,6 +1,6 @@
 [package]
 name = "recency-tracker"
-version = "3.1.0"
+version = "0.0.0" # Releases are CalVer Git tags; the build injects RECENCY_TRACKER_VERSION.
 edition = "2024"
 publish = false
 

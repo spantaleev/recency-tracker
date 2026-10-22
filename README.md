@@ -151,8 +151,9 @@ Installation
 ### Container (recommended for self-hosting)
 
 Images are published to `ghcr.io/spantaleev/recency-tracker` for Linux amd64 and
-arm64. Use an exact release tag such as `3.1.0` for deliberate upgrades. The `3.1`,
-`3`, and `latest` tags follow stable releases; `edge` follows the development branch.
+arm64. Releases use CalVer tags (`YYYY.MM.DD.N`, such as `2026.10.22.0`); pin an exact
+tag for deliberate upgrades. `latest` follows releases and `edge` follows the development
+branch. The `3`, `3.1` and `3.1.0` tags are frozen at the last semver release.
 
 Copy `config/container.json.dist` to a local `config.json` and **change the publishing
 secret**, or supply it through `RECENCY_TRACKER_PUBLISHER_SECRET`. This configuration
@@ -165,7 +166,7 @@ bound to localhost for a reverse proxy:
 ```yaml
 services:
   recency-tracker:
-    image: ghcr.io/spantaleev/recency-tracker:3.1.0
+    image: ghcr.io/spantaleev/recency-tracker:2026.10.22.0
     restart: unless-stopped
     read_only: true
     ports:
@@ -254,12 +255,11 @@ smoke-tests Linux amd64 and arm64 containers on native runners.
 
 ### Publishing a release
 
-`rust/Cargo.toml` is the version source; update its package version and the matching
-self-package entry in `rust/Cargo.lock` manually and commit them together. A matching
-stable `v3.X.Y` Git tag runs native validation before publishing the exact tested
-images, their combined manifest, and the version, minor, `3`, and `latest` tags.
-Pushes to `master` publish `edge` after the same checks pass. No version or tag is
-selected automatically. Manual release-workflow runs validate without publishing.
+Releases are automatic; see [AGENTS.md](AGENTS.md#releases). The `Release` workflow
+tags master as `vYYYY.MM.DD.N` once its image-relevant changes have passed CI and no
+Renovate PR is about to land, then publishes the exact tested images as
+`YYYY.MM.DD.N` and `latest`. Run it manually to release immediately. Pushes to
+`master` publish `edge` after the same checks pass.
 
 ### Upgrading from 2.x to 3.x
 

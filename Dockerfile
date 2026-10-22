@@ -3,6 +3,7 @@ WORKDIR /build
 COPY rust/Cargo.toml rust/Cargo.lock ./rust/
 COPY rust/src/ ./rust/src/
 COPY resources/static/ ./resources/static/
+ARG RECENCY_TRACKER_VERSION=dev
 RUN cargo build --release --locked --manifest-path rust/Cargo.toml \
     && mkdir /config /data /app
 

@@ -203,10 +203,10 @@ exact tested images as artifacts, and only then publishes architecture-specific
 images and their combined index. The index must contain exactly linux/amd64 and
 linux/arm64 before stable tags become visible. No QEMU build is required.
 
-For a release, manually set the Cargo package and matching lockfile version, then
-push the matching stable `v3.X.Y` tag. Release tags publish the exact version, minor,
-`3`, and `latest`, with optional `-amd64` / `-arm64` version tags. Publication is
-serialized, checks the tested child digests and verifies the final aliases. An
-older stable tag cannot move aliases behind a newer stable Git tag. Manual runs of
-`Rust multi-arch release` perform validation without registry writes. Master pushes
-publish `edge` after native validation. No tag/release is created automatically.
+Releases are cut automatically as CalVer `vYYYY.MM.DD.N` tags (see
+[AGENTS.md](../AGENTS.md#releases)). Cargo cannot represent that version, so the
+package stays `0.0.0` and release builds embed `RECENCY_TRACKER_VERSION` instead;
+other builds report `dev`. A release publishes the exact version and `latest`, with
+`-amd64` / `-arm64` version tags. Publication is serialized, checks the tested child
+digests and verifies the final aliases. An older release cannot move `latest` behind
+a newer release tag. Master pushes publish `edge` after native validation.

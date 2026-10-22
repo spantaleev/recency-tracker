@@ -29,11 +29,14 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
         Err(_) => return Err("allowed origins override must be valid Unicode".into()),
     }
     let server = Server::start(config).await?;
+    // Release builds receive their CalVer version at compile time; Cargo cannot represent it.
+    let version = match option_env!("RECENCY_TRACKER_VERSION") {
+        Some(version) if !version.is_empty() => version,
+        _ => "dev",
+    };
     eprintln!(
         "recency-tracker {} listening on publisher {} and subscriber {}",
-        env!("CARGO_PKG_VERSION"),
-        server.publisher,
-        server.subscriber
+        version, server.publisher, server.subscriber
     );
     let result = signal().await;
     tokio::time::timeout(Duration::from_secs(15), server.shutdown()).await??;

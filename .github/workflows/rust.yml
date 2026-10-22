@@ -2,6 +2,11 @@ name: Rust validation
 
 on:
   workflow_call:
+    inputs:
+      version:
+        description: CalVer release version embedded into the binary; empty builds report "dev"
+        default: ''
+        type: string
 
 permissions:
   contents: read
@@ -99,6 +104,7 @@ jobs:
           load: true
           push: false
           tags: recency-tracker:rust-candidate
+          build-args: ${{ inputs.version && format('RECENCY_TRACKER_VERSION={0}', inputs.version) || '' }}
           cache-from: type=gha,scope=rust-${{ matrix.arch }}
           cache-to: type=gha,mode=max,scope=rust-${{ matrix.arch }}
       - run: node scripts/smoke-container.js recency-tracker:rust-candidate
