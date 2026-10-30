@@ -11,6 +11,12 @@
 			"pinDigests": true
 		},
 		{
+			"description": "Digests change only together with their versions: a digest refresh alone would rebuild and release an otherwise unchanged image.",
+			"matchManagers": ["dockerfile"],
+			"matchUpdateTypes": ["digest"],
+			"enabled": false
+		},
+		{
 			"matchManagers": ["npm"],
 			"matchDepTypes": ["dependencies", "devDependencies", "optionalDependencies"],
 			"rangeStrategy": "pin"
