@@ -1,4 +1,4 @@
-FROM docker.io/rust:1.99.1-alpine3.24@sha256:27cd9befd4a05d6f6eb407c3e28365f5092f008bfc5946207cca76ae5179ef23 AS build
+FROM docker.io/rust:1.99.1-alpine3.24@sha256:f432d4b8663fbc50b29e33846bf6a1fb9f17f142023598899d641cddf57c6b22 AS build
 WORKDIR /build
 COPY rust/Cargo.toml rust/Cargo.lock ./rust/
 COPY rust/src/ ./rust/src/
