@@ -17,7 +17,7 @@ futures-util = { version = "0.3", default-features = false, features = ["sink", 
 ryu-js = "1"
 
 tempfile = "=3.27.0"
-hyper = { version = "=1.12.0", features = ["server", "http1"] }
+hyper = { version = "=1.13.0", features = ["server", "http1"] }
 hyper-util = { version = "=0.1.21", features = ["tokio", "service"] }
 
 [target.'cfg(unix)'.dependencies]
